@@ -16,8 +16,8 @@ export class YandexAuth {
   async token(parameters) {
     const response=await this.request('https://oauth.yandex.ru/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:this.clientId,...(this.secret ? {client_secret:this.secret} : {}),...parameters}),signal:AbortSignal.timeout(10000),redirect:'error'});
     const result=await response.json();
-    if (!response.ok || !result.access_token) throw new Error('MAIL_AUTH_FAILED');
-    if (result.scope && !String(result.scope).split(' ').includes('mail:imap_ro')) throw new Error('MAIL_AUTH_FAILED');
+    if (!response.ok || !result.access_token) throw new Error(['invalid_client','unauthorized_client','invalid_scope'].includes(result.error) ? 'MAIL_OAUTH_CLIENT' : 'MAIL_OAUTH_TOKEN');
+    if (result.scope && !String(result.scope).split(' ').includes('mail:imap_ro')) throw new Error('MAIL_OAUTH_SCOPE');
     return {accessToken:result.access_token,refreshToken:result.refresh_token,expiresAt:Date.now()+Number(result.expires_in ?? 3600)*1000};
   }
   async finish(owner, state, code) {

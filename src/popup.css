@@ -69,6 +69,9 @@ select:focus-visible,button:focus-visible,.switch input:focus-visible+.slider{ou
 .mail-form[hidden],.mail-flow[hidden]{display:none}
 .mail-form label,.microsoft-settings label{display:block;margin:9px 0 4px;color:#586780;font-size:11px}
 .mail-form input,.microsoft-settings input{box-sizing:border-box;width:100%;padding:9px 10px;border:1px solid #dce3ef;border-radius:9px;background:#fbfcff;color:#263752;font:12px system-ui}
+.mail-form .setting-check{display:flex;align-items:flex-start;gap:8px}
+.mail-form input[type=checkbox]{flex:none;width:16px;height:16px;margin:2px 0 0;padding:0;accent-color:#546be9}
+.mail-form summary[hidden]{display:none}
 .mail-form button,.microsoft-settings button{margin-top:11px}
 .mail-form details,.microsoft-settings{margin-top:12px}
 .mail-form summary,.microsoft-settings summary{font-size:11px;color:#5369e8;cursor:pointer}

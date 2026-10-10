@@ -55,7 +55,7 @@ test('mail connection UI sends credentials only to extension service worker, the
   const { window } = dom;
   const writes = [], requests = [];
   window.listAccounts = async () => ({ primaryEmail: null, extras: [], mailAccounts: [] });
-  window.MAIL_PROVIDERS = { yahoo: { name: 'Yahoo', host: 'imap.mail.yahoo.com' }, imap: { name: 'IMAP', host: '' } };
+  window.MAIL_PROVIDERS = { yandex: {name:'Яндекс',host:'imap.yandex.ru'}, yahoo: { name: 'Yahoo', host: 'imap.mail.yahoo.com' }, imap: { name: 'IMAP', host: '' } };
   window.chrome = {
     i18n: { getMessage: () => '' }, runtime: { getManifest: () => ({ version: '0.7.0' }), sendMessage: async request => { requests.push(request); return { status: 'ok', account: { email: 'owner@yahoo.com' } }; } },
     tabs: { query: async () => [{ id: 1, url: 'about:blank' }] },
@@ -82,5 +82,18 @@ test('mail connection UI sends credentials only to extension service worker, the
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.match($('accounts').textContent, /Обновите CodeSnap/);
   assert.equal($('mailPassword').value, '');
+  $('provider').value = 'yandex'; $('provider').dispatchEvent(new window.Event('change'));
+  assert.equal($('mailCredentials').open,false);
+  const before=requests.length;
+  $('connect').click();
+  await new Promise(resolve => setTimeout(resolve,20));
+  assert.equal(requests.length,before,'no server contact before explicit consent');
+  $('mailCloudEnabled').checked=false; $('mailConsent').checked=true;
+  window.chrome.runtime.sendMessage=async request=>{ requests.push(request); return {status:'error',message:'test OAuth rejection'}; };
+  $('connect').click();
+  await new Promise(resolve => setTimeout(resolve,20));
+  assert.equal(requests.at(-1).type,'MAIL_YANDEX_CONNECT','main connect button launches official OAuth without email or password');
+  assert.equal($('mailCloudEnabled').checked,true);
+  assert.equal($('accounts').textContent,'test OAuth rejection');
   dom.window.close();
 });

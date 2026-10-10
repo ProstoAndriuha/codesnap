@@ -2,7 +2,7 @@
 
 Chrome Manifest V3 extension: find recent email verification codes and fill OTP fields with one click. Never submits website forms.
 
-Version 0.8.0. No Python, PowerShell or local mail helper required. Chrome Web Store publication remains pending; Gmail availability is subject to Google's OAuth test-user and verification rules.
+Version 0.8.1. No Python, PowerShell or local mail helper required. Chrome Web Store publication remains pending; Gmail availability is subject to Google's OAuth test-user and verification rules.
 
 - Gmail: direct Google OAuth + Gmail API, multiple accounts.
 - Yandex: official OAuth sign-in, read-only IMAP through CodeSnap Cloud.

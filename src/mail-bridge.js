@@ -52,6 +52,11 @@ export function describeMailError(error) {
     MAIL_RATE_LIMIT: 'Слишком много запросов. Подождите и повторите.',
     MAIL_BUSY: 'Почта ещё проверяется. Повторите через несколько секунд.',
     MAIL_OAUTH_STATE: 'Вход в Яндекс истёк или был отменён. Подключитесь снова.',
+    MAIL_OAUTH_DENIED: 'Яндекс не разрешил доступ к почте. Повторите вход и разрешите чтение писем.',
+    MAIL_OAUTH_CLIENT: 'Яндекс отклонил настройки приложения CodeSnap. Это ошибка подключения приложения, а не вашего пароля.',
+    MAIL_OAUTH_TOKEN: 'Яндекс не подтвердил разрешение на доступ. Начните вход через Яндекс заново.',
+    MAIL_OAUTH_SCOPE: 'Яндекс не предоставил разрешение на чтение почты. Повторите вход и разрешите чтение писем.',
+    MAIL_YANDEX_IMAP: 'Яндекс подтвердил вход, но отклонил чтение почты по IMAP. В настройках Яндекс Почты включите доступ через IMAP и OAuth-токены.',
     MAIL_OAUTH_UNAVAILABLE: 'Вход через Яндекс сейчас недоступен. Используйте пароль приложения.',
     MAIL_CAPACITY: 'Достигнут лимит CodeSnap Cloud. Отключите ненужный аккаунт.'
   };
@@ -65,6 +70,9 @@ export async function connectYandex() {
   try { response = await chrome.identity.launchWebAuthFlow({ url: started.url, interactive: true }); }
   catch { throw new Error('MAIL_OAUTH_STATE'); }
   const callback = new URL(response);
-  if (`${callback.origin}${callback.pathname}` !== redirect || callback.searchParams.get('state') !== started.state || !callback.searchParams.get('code')) throw new Error('MAIL_OAUTH_STATE');
+  if (`${callback.origin}${callback.pathname}` !== redirect || callback.searchParams.get('state') !== started.state) throw new Error('MAIL_OAUTH_STATE');
+  const rejected = callback.searchParams.get('error');
+  if (rejected) throw new Error(rejected === 'access_denied' ? 'MAIL_OAUTH_DENIED' : ['unauthorized_client','invalid_client','invalid_scope'].includes(rejected) ? 'MAIL_OAUTH_CLIENT' : 'MAIL_OAUTH_TOKEN');
+  if (!callback.searchParams.get('code')) throw new Error('MAIL_OAUTH_STATE');
   return mailHost({ command: 'yandex-finish', consent: true, state: started.state, code: callback.searchParams.get('code') });
 }

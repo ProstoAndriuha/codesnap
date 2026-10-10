@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { YandexAuth } from '../src/yandex.js';
 const redirect='https://ongiekgidmkffdhgmjmlnjjgoggojoak.chromiumapp.org/yandex';
+test('OAuth rejection distinguishes client, token and scope without exposing provider details',async()=>{
+  for (const [result,expected] of [[{error:'invalid_client',error_description:'private detail'},'MAIL_OAUTH_CLIENT'],[{error:'invalid_grant'},'MAIL_OAUTH_TOKEN'],[{access_token:'private',scope:'login:email'},'MAIL_OAUTH_SCOPE']]) {
+    const oauth=new YandexAuth('test-app',[redirect],async()=>({ok:Boolean(result.access_token),json:async()=>result}));
+    const flow=oauth.start('owner',redirect);
+    await assert.rejects(oauth.finish('owner',flow.state,'test-code'),error=>error.message===expected);
+  }
+});
 test('OAuth binds state to device, uses PKCE and readonly scope, never returns token to browser, rejects replay',async()=>{
   let authUrl;
   const oauth=new YandexAuth('test-app',[redirect],async(url,options)=>{

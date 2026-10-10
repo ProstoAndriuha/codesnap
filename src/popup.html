@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">0.8.0</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">0.8.1</span></div>
     <p data-i18n="tagline">Your email codes, exactly where you need them.</p>
   </header>
 
@@ -28,9 +28,12 @@
       <label class="sr-only" for="provider">Почтовый сервис</label>
       <select id="provider"><option value="gmail">Google / Gmail</option><option value="yahoo">Yahoo</option><option value="yandex">Яндекс</option><option value="mailru">Mail.ru</option><option value="imap">Другая почта / ручной IMAP</option></select>
       <div class="account-actions"><button class="secondary" id="connect" type="button" data-i18n="connectGmail">Connect mail</button><button class="text-button" id="removeAccount" type="button" data-i18n="removeSelected" hidden>Remove selected</button></div>
+      <p class="subtle" id="accounts" role="status" aria-live="polite" data-i18n="connectPrompt">Connect Gmail to find your codes.</p>
       <form id="mailForm" class="mail-form" hidden>
+        <p id="yandexOAuthHint" class="subtle" data-i18n="yandexOAuthHint" hidden>Вход откроется на официальном сайте Яндекса. Наш сервер читает письма через IMAP: Chrome не поддерживает это соединение напрямую. Устанавливать программы не нужно.</p>
+        <label class="setting-check"><input id="mailConsent" type="checkbox" required><span data-i18n="mailCloudConsent">Разрешаю серверу CodeSnap хранить данные подключения зашифрованными и читать недавние письма для поиска кодов. Удаление аккаунта удаляет его данные подключения с сервера.</span></label>
         <button id="connectYandex" class="secondary" type="button" data-i18n="connectYandexOAuth" hidden>Войти через Яндекс</button>
-        <p id="yandexOAuthHint" class="subtle" data-i18n="yandexOAuthHint" hidden>Подтвердите CodeSnap Cloud ниже и войдите на официальном сайте Яндекса. Пароль приложения — запасной вариант.</p>
+        <details id="mailCredentials"><summary id="mailCredentialsTitle" data-i18n="mailPasswordAlternative">Запасной вариант: пароль приложения</summary>
         <label for="mailEmail">Адрес почты</label><input id="mailEmail" type="email" autocomplete="off" required placeholder="name@example.com">
         <label for="mailPassword">Пароль приложения</label><input id="mailPassword" type="password" autocomplete="off" required>
         <p class="subtle">Создайте отдельный пароль приложения в настройках вашей почты.</p><a id="mailHelp" class="text-button" target="_blank" rel="noopener noreferrer">Как получить пароль приложения</a>
@@ -40,10 +43,9 @@
           <label for="imapSecurity">Защищённое соединение</label><select id="imapSecurity"><option value="tls">SSL/TLS</option><option value="starttls">STARTTLS</option></select>
           <label for="imapLogin">Логин, если отличается от адреса</label><input id="imapLogin" autocomplete="off">
         </details>
-        <label class="setting-check"><input id="mailConsent" type="checkbox" required><span data-i18n="mailCloudConsent">Разрешаю CodeSnap Cloud хранить пароль приложения зашифрованным и читать недавние письма для поиска кодов. Отключение аккаунта удаляет его данные с сервера.</span></label>
-        <button id="saveMail" class="secondary" type="submit" data-i18n="mailCloudConnect">Подключить через CodeSnap Cloud</button>
+        <button id="saveMail" class="secondary" type="submit" data-i18n="mailCloudConnect">Подключить почту</button>
+        </details>
       </form>
-      <p class="subtle" id="accounts" data-i18n="connectPrompt">Connect Gmail to find your codes.</p>
       <p class="subtle"><span data-i18n="privacyDisclaimer">Gmail connects directly to Google. Optional CodeSnap Cloud processes recent IMAP mail and stores credentials encrypted on our server. No sending or deleting emails.</span> <a href="https://prostoandriuha.github.io/codesnap/privacy.html" target="_blank" rel="noopener noreferrer" data-i18n="privacyLink">Privacy</a></p>
     </section>
 

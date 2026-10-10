@@ -31,7 +31,7 @@ export function createService({ vault, origins, oauth = new YandexAuth('',[]), c
     const origin = req.headers.origin;
     if (origin && !origins.includes(origin)) return send(403, { ok: false, error: 'MAIL_FORBIDDEN' });
     if (origin) { res.setHeader('Access-Control-Allow-Origin',origin); res.setHeader('Vary','Origin'); }
-    if (req.url === `${API_PREFIX}/health` && req.method === 'GET') return send(200,{ ok:true, service:'CodeSnap Cloud', version:'0.8.0', yandexOAuth:Boolean(oauth.clientId) });
+    if (req.url === `${API_PREFIX}/health` && req.method === 'GET') return send(200,{ ok:true, service:'CodeSnap Cloud', version:'0.8.1', yandexOAuth:Boolean(oauth.clientId) });
     if (req.url !== API_PREFIX) return send(404,{ ok:false, error:'MAIL_NOT_FOUND' });
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Allow-Methods','POST, OPTIONS'); res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type');
@@ -59,7 +59,13 @@ export function createService({ vault, origins, oauth = new YandexAuth('',[]), c
         if (input.consent !== true) throw new Error('MAIL_CONSENT_REQUIRED');
         if (limited(`connect:${ip}`,12,3600000)) throw new Error('MAIL_RATE_LIMIT');
         const account = input.command === 'connect' ? configuration(input) : await oauth.finish(owner,input.state,input.code);
-        await run(owner, () => check(account));
+        await run(owner, async () => {
+          try { await check(account); }
+          catch (error) {
+            if (input.command === 'yandex-finish' && error.message === 'MAIL_AUTH_FAILED') throw new Error('MAIL_YANDEX_IMAP');
+            throw error;
+          }
+        });
         const result = await vault.update(owner, records => {
           const existing = records.find(item => item.email === account.email && item.provider === account.provider);
           if (!existing && records.length >= 20) throw new Error('MAIL_CAPACITY');
@@ -89,7 +95,7 @@ export function createService({ vault, origins, oauth = new YandexAuth('',[]), c
       if (cache.size >= 1000) cache.delete(cache.keys().next().value);
       cache.set(key,{at:Date.now(),messages}); return send(200,{ok:true,messages});
     } catch (error) {
-      const allowed = ['MAIL_CONFIG_INVALID','MAIL_AUTH_FAILED','MAIL_TLS_FAILED','MAIL_UNAVAILABLE','MAIL_STORAGE_FAILED','MAIL_BUSY','MAIL_CAPACITY','MAIL_RATE_LIMIT','MAIL_CONSENT_REQUIRED','MAIL_ACCOUNT_MISSING','MAIL_OAUTH_STATE','MAIL_OAUTH_UNAVAILABLE'];
+      const allowed = ['MAIL_CONFIG_INVALID','MAIL_AUTH_FAILED','MAIL_TLS_FAILED','MAIL_UNAVAILABLE','MAIL_STORAGE_FAILED','MAIL_BUSY','MAIL_CAPACITY','MAIL_RATE_LIMIT','MAIL_CONSENT_REQUIRED','MAIL_ACCOUNT_MISSING','MAIL_OAUTH_STATE','MAIL_OAUTH_UNAVAILABLE','MAIL_OAUTH_CLIENT','MAIL_OAUTH_TOKEN','MAIL_OAUTH_SCOPE','MAIL_YANDEX_IMAP'];
       const code = allowed.includes(error.message) ? error.message : 'MAIL_UNAVAILABLE';
       send(code === 'MAIL_RATE_LIMIT' ? 429 : code === 'MAIL_BUSY' ? 503 : 400,{ok:false,error:code});
     }
@@ -103,6 +109,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const oauth=new YandexAuth(process.env.YANDEX_CLIENT_ID,redirects,fetch,process.env.YANDEX_CLIENT_SECRET);
   const server = createService({vault,origins,oauth});
   server.requestTimeout = 30000; server.headersTimeout = 10000;
-  server.listen(Number(process.env.PORT ?? 8787),'127.0.0.1', () => console.log('CodeSnap Cloud 0.8.0 ready'));
+  server.listen(Number(process.env.PORT ?? 8787),'127.0.0.1', () => console.log('CodeSnap Cloud 0.8.1 ready'));
   for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => server.close(() => process.exit(0)));
 }

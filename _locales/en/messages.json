@@ -159,7 +159,7 @@
     "message": "LATEST"
   },
   "mailCloudTitle": {
-    "message": "Mail through CodeSnap Cloud"
+    "message": "Mail through our server"
   },
   "mailCloudDescription": {
     "message": "Yandex, Mail.ru, Yahoo and IMAP without installing programs. Gmail connects directly."
@@ -168,21 +168,24 @@
     "message": "App passwords and OAuth tokens are encrypted on the CodeSnap server. Mail is processed in memory, not saved to disk. Turning Cloud off pauses access; remove each account first to delete its stored credentials."
   },
   "mailCloudConsent": {
-    "message": "I allow CodeSnap Cloud to store my connection credentials encrypted and read recent mail to find codes. Removing the account deletes its stored connection data."
+    "message": "Allow the CodeSnap server to store connection credentials encrypted and read recent emails to find codes. Removing the account deletes its connection credentials from the server."
   },
   "mailCloudConnect": {
-    "message": "Connect through CodeSnap Cloud"
+    "message": "Connect mail"
   },
   "mailCloudEnableFirst": {
     "message": "Enable Mail through CodeSnap Cloud in Settings below, then confirm the connection in the form."
   },
   "mailCloudConsentRequired": {
-    "message": "Enable CodeSnap Cloud and confirm the connection below."
+    "message": "Check the consent box to allow the CodeSnap server to read recent emails."
   },
   "connectYandexOAuth": {
     "message": "Sign in with Yandex"
   },
   "yandexOAuthHint": {
-    "message": "Confirm CodeSnap Cloud below and sign in on the official Yandex page. App password is an alternative."
+    "message": "Sign in on the official Yandex website. Our server reads mail through IMAP because Chrome cannot connect to IMAP directly. No software installation is needed."
+  },
+  "mailPasswordAlternative": {
+    "message": "Alternative: app password"
   }
 }

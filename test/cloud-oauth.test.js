@@ -17,6 +17,10 @@ test('Yandex official auth callback is bound to exact redirect/state and exchang
       globalThis.chrome.identity.launchWebAuthFlow=async()=>callback;
       const before=requests.length; await assert.rejects(connectYandex(),/MAIL_OAUTH_STATE/); assert.equal(requests.length,before+1);
     }
+    globalThis.chrome.identity.launchWebAuthFlow=async()=>`${redirect}?state=test-state&error=access_denied`;
+    const before=requests.length;
+    await assert.rejects(connectYandex(),/MAIL_OAUTH_DENIED/);
+    assert.equal(requests.length,before+1);
   } finally {Object.assign(globalThis,prior);}
 });
 test('edge challenge is explicit and strict mailbox list propagates connection failure',async()=>{

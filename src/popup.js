@@ -36,6 +36,19 @@ function configureProvider() {
   $('mailConsent').checked = false;
   $('connectYandex').hidden = provider !== 'yandex';
   $('yandexOAuthHint').hidden = provider !== 'yandex';
+  $('mailCredentials').open = provider !== 'yandex';
+  $('mailCredentialsTitle').hidden = provider !== 'yandex';
+}
+
+async function enableMailWithConsent() {
+  if (!$('mailConsent').checked) {
+    $('accounts').textContent = t('mailCloudConsentRequired', 'Подтвердите чтение писем сервером CodeSnap галочкой в форме подключения.');
+    $('mailConsent').focus();
+    return false;
+  }
+  await chrome.storage.local.set({ mailCloudEnabled: true });
+  $('mailCloudEnabled').checked = true;
+  return true;
 }
 
 function applyI18n() {
@@ -168,12 +181,8 @@ async function init() {
 $('connect').addEventListener('click', async () => {
   const provider = $('provider').value;
   if (provider !== 'gmail') {
-    if (!$('mailCloudEnabled').checked) {
-      $('accounts').textContent = t('mailCloudEnableFirst', 'Включите «Почта через CodeSnap Cloud» в настройках ниже, затем подтвердите подключение в форме.');
-      $('mailCloudEnabled').closest('details').open = true;
-      return;
-    }
     if ($('mailForm').hidden) { configureProvider(); $('mailEmail').focus(); }
+    else if (provider === 'yandex') $('connectYandex').click();
     else $('mailForm').requestSubmit();
     return;
   }
@@ -222,10 +231,7 @@ $('detailedPopup').addEventListener('change', async () => {
 
 $('provider').addEventListener('change', configureProvider);
 $('connectYandex').addEventListener('click', async () => {
-  if (!$('mailConsent').checked || !$('mailCloudEnabled').checked) {
-    $('accounts').textContent = t('mailCloudConsentRequired', 'Включите CodeSnap Cloud и подтвердите подключение.');
-    $('mailCloudEnabled').closest('details').open = true; return;
-  }
+  if ($('connectYandex').disabled || !await enableMailWithConsent()) return;
   $('connectYandex').disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({ type: 'MAIL_YANDEX_CONNECT', consent: true });
@@ -244,9 +250,7 @@ $('imapSecurity').addEventListener('change', () => {
 });
 $('mailForm').addEventListener('submit', async event => {
   event.preventDefault(); $('saveMail').disabled = true;
-  if (!$('mailConsent').checked || !$('mailCloudEnabled').checked) {
-    $('accounts').textContent = t('mailCloudConsentRequired', 'Включите CodeSnap Cloud и подтвердите подключение.'); $('saveMail').disabled = false; return;
-  }
+  if (!await enableMailWithConsent()) { $('saveMail').disabled = false; return; }
   const password = $('mailPassword').value; $('mailPassword').value = '';
   try {
     const result = await manageMail({ command: 'connect', consent: true, provider: $('provider').value, email: $('mailEmail').value.trim(), password, host: $('imapHost').value.trim(), port: Number($('imapPort').value), security: $('imapSecurity').value, login: $('imapLogin').value.trim() });
