@@ -159,7 +159,7 @@
     "message": "НОВЫЙ"
   },
   "mailCloudTitle": {
-    "message": "Почта через наш сервер"
+    "message": "Почта через CodeSnap Cloud"
   },
   "mailCloudDescription": {
     "message": "Яндекс, Mail.ru, Yahoo и IMAP без установки программ. Gmail подключается напрямую."
@@ -187,5 +187,8 @@
   },
   "mailPasswordAlternative": {
     "message": "Запасной вариант: пароль приложения"
+  },
+  "directMailPrivacy": {
+    "message": "Gmail подключается напрямую к Google. CodeSnap не отправляет и не удаляет письма."
   }
 }

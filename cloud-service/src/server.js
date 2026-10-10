@@ -31,7 +31,7 @@ export function createService({ vault, origins, oauth = new YandexAuth('',[]), c
     const origin = req.headers.origin;
     if (origin && !origins.includes(origin)) return send(403, { ok: false, error: 'MAIL_FORBIDDEN' });
     if (origin) { res.setHeader('Access-Control-Allow-Origin',origin); res.setHeader('Vary','Origin'); }
-    if (req.url === `${API_PREFIX}/health` && req.method === 'GET') return send(200,{ ok:true, service:'CodeSnap Cloud', version:'0.8.1', yandexOAuth:Boolean(oauth.clientId) });
+    if (req.url === `${API_PREFIX}/health` && req.method === 'GET') return send(200,{ ok:true, service:'CodeSnap Cloud', version:'0.8.2', yandexOAuth:Boolean(oauth.clientId) });
     if (req.url !== API_PREFIX) return send(404,{ ok:false, error:'MAIL_NOT_FOUND' });
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Allow-Methods','POST, OPTIONS'); res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type');
@@ -109,6 +109,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const oauth=new YandexAuth(process.env.YANDEX_CLIENT_ID,redirects,fetch,process.env.YANDEX_CLIENT_SECRET);
   const server = createService({vault,origins,oauth});
   server.requestTimeout = 30000; server.headersTimeout = 10000;
-  server.listen(Number(process.env.PORT ?? 8787),'127.0.0.1', () => console.log('CodeSnap Cloud 0.8.1 ready'));
+  server.listen(Number(process.env.PORT ?? 8787),'127.0.0.1', () => console.log('CodeSnap Cloud 0.8.2 ready'));
   for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => server.close(() => process.exit(0)));
 }

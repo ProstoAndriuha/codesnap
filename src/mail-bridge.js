@@ -31,6 +31,10 @@ export async function mailHost(request) {
   if (response.headers?.get('cf-mitigated') === 'challenge') throw new Error('MAIL_EDGE_BLOCKED');
   let result;
   try { result = await response.json(); } catch { throw new Error('MAIL_UNAVAILABLE'); }
+  if ((await chrome.storage.local.get('mailCloudEnabled')).mailCloudEnabled !== true) {
+    if (request.command === 'list') return { ok: true, accounts: [] };
+    throw new Error('MAIL_CLOUD_DISABLED');
+  }
   if (!response.ok || !result?.ok) throw new Error(response.status === 429 ? 'MAIL_RATE_LIMIT' : result?.error || 'MAIL_UNAVAILABLE');
   return result;
 }

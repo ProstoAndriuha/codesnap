@@ -14,6 +14,10 @@ const errors = {
 
 function originOf(url) { try { return new URL(url).origin; } catch { return null; } }
 const sessionKey = (tabId, frameId = 0) => `${tabId}:${frameId}`;
+const isCloudCandidate = item => Boolean(item?.accountProvider && item.accountProvider !== 'gmail');
+async function candidateEnabled(item) {
+  return !isCloudCandidate(item) || (await chrome.storage.local.get('mailCloudEnabled')).mailCloudEnabled === true;
+}
 
 async function tabMatches(tabId, origin, fieldId = null, frameId = 0) {
   let tab;
@@ -42,11 +46,13 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
   if (trusted && siteForOrigin(origin) !== siteId) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
   const learnedSenders = await rememberedSenders(siteId, origin);
   const startedAt = Number.isFinite(detectedAt) && detectedAt <= Date.now() + 30_000 && detectedAt > Date.now() - 300_000 ? detectedAt : null;
-  const { accountSelections = {} } = await chrome.storage.local.get('accountSelections');
-  const selected = accountSelection ?? accountSelections[origin] ?? 'all';
+  const { accountSelections = {}, mailCloudEnabled } = await chrome.storage.local.get(['accountSelections', 'mailCloudEnabled']);
+  let selected = accountSelection ?? accountSelections[origin] ?? 'all';
+  if (selected.startsWith('mail:') && mailCloudEnabled !== true) selected = 'all';
   const searchKeyBase = `${siteId}|${learnedSenders.join(',')}|${selected}`;
   const searchKey = `${searchKeyBase}|${automatic ? 'auto' : 'manual'}`;
-  const previous = sessions.get(key);
+  let previous = sessions.get(key);
+  if (previous && !await candidateEnabled(previous)) { sessions.delete(key); previous = null; }
   const codeNotReplaced = !previous?.used && (!detectedAt || !previous?.timestamp || previous.timestamp >= detectedAt - 5000);
   const sameContext = previous?.origin === origin && (previous.fieldId === fieldId || !fieldId || !previous.fieldId) && previous.searchKeyBase === searchKeyBase && Date.now() - previous.created < SEARCH_WINDOW_SECONDS * 1000;
   if (sameContext && previous.status === 'found' && codeNotReplaced && candidateIsFresh(previous)) return { status: inline && previous.requiresReview ? 'review' : 'found', code: previous.code, timestamp: previous.timestamp, lifetimeSeconds: previous.lifetimeSeconds, from: previous.from, subject: previous.subject, requiresReview: previous.requiresReview, accountEmail: previous.accountEmail, accountProvider: previous.accountProvider, sessionId: previous.sessionId };
@@ -115,15 +121,18 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
     if (sessions.get(key)?.sessionId !== sessionId || session.searchSeq !== searchSeq || !(await tabMatches(tabId, origin, fieldId, frameId))) {
       return { status: 'changed', message: 'Tab changed. Search again.' };
     }
-    const rank = items => rankCandidates(items, { siteId, learnedSenders, origin, siteContext, startedAt: automatic ? startedAt : null, startToleranceMs: 180_000 });
-    let ranked = rank(messages);
+    const rank = async items => {
+      const { mailCloudEnabled } = await chrome.storage.local.get('mailCloudEnabled');
+      return rankCandidates(items.filter(item => !isCloudCandidate(item) || mailCloudEnabled === true), { siteId, learnedSenders, origin, siteContext, startedAt: automatic ? startedAt : null, startToleranceMs: 180_000 });
+    };
+    let ranked = await rank(messages);
     if ((ranked.status === 'none' || ranked.status === 'old') && (!automatic || searchSeq === 1 || session.historyReset || !Object.keys(session.historyIds ?? {}).length)) {
       const more = await fetchAccounts(true);
       session.historyReset = false;
       if (sessions.get(key)?.sessionId !== sessionId || session.searchSeq !== searchSeq || !(await tabMatches(tabId, origin, fieldId, frameId))) {
         return { status: 'changed', message: 'Tab changed. Search again.' };
       }
-      ranked = rank([...messages, ...more]);
+      ranked = await rank([...messages, ...more]);
     }
     if (ranked.status === 'found') {
       sessions.set(key, { ...session, status: 'found', ...ranked.candidate });
@@ -145,6 +154,7 @@ async function insert({ tabId, frameId = 0, origin, sessionId }) {
   const key = sessionKey(tabId, frameId);
   const item = sessions.valid(key, origin, sessionId);
   if (!item) return { status: 'expired', message: 'Code expired. Search again.' };
+  if (!await candidateEnabled(item)) { sessions.delete(key); return { status: 'expired', message: 'Cloud mail is disabled.' }; }
   if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
   if (item.siteId !== 'generic' && !trustedOrigin(origin, item.siteId)) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
   try {
@@ -168,6 +178,7 @@ async function rememberSender(item) {
 
 async function trustCandidate({ tabId, origin, sessionId }) {
   const item = sessions.valid(sessionKey(tabId), origin, sessionId);
+  if (!await candidateEnabled(item)) return { status: 'expired', message: 'Cloud mail is disabled.' };
   if (!item || !(await tabMatches(tabId, origin, item.fieldId))) return { status: 'expired', message: 'Search again.' };
   await rememberSender(item);
   item.used = true;
@@ -181,6 +192,7 @@ async function selectCandidate({ tabId, frameId = 0, origin, sessionId, index })
   if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
   const candidate = item.candidates[index];
   if (!Number.isInteger(index) || index < 0 || !candidate || !candidateIsFresh(candidate)) return { status: 'old', message: 'Old code.' };
+  if (!await candidateEnabled(candidate)) return { status: 'expired', message: 'Cloud mail is disabled.' };
   sessions.set(key, { ...item, status: 'found', candidates: undefined, ...candidate });
   return { status: 'found', code: candidate.code, timestamp: candidate.timestamp, lifetimeSeconds: candidate.lifetimeSeconds, from: candidate.from, subject: candidate.subject, requiresReview: candidate.requiresReview, accountEmail: candidate.accountEmail, accountProvider: candidate.accountProvider, sessionId };
 }

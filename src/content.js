@@ -491,6 +491,12 @@
     if (contextInvalidated(error)) showReloadRequired();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.mailCloudEnabled) {
+      watchGeneration++; searching = false;
+      code = null; sessionId = null; review = null; codeDetails = null; choices = null; closePanel();
+      if (chip) { chip.textContent = '⚡'; chip.title = ''; }
+      if (autoWatch) paint();
+    }
     if (area === 'local' && changes.detailedPopup) {
       detailedPopup = changes.detailedPopup.newValue === true;
       if (detailedPopup) showCodePanel(); else if (panel?.dataset.kind === 'codes') closePanel();

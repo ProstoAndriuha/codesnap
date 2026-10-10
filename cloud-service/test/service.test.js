@@ -61,3 +61,29 @@ test('API isolates devices, requires consent, hides secrets and disconnect delet
     assert.equal((await send({command:'search',id:connected.account.id})).status,404);
   } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});}
 });
+
+test('two devices have separate mailbox ids, code caches and deletion even for the same email',async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'codesnap-owner-'));
+  const vault=new Vault(directory,randomBytes(32));await vault.init();
+  const origin='chrome-extension://ongiekgidmkffdhgmjmlnjjgoggojoak';
+  const server=createService({vault,origins:[origin],check:async()=>true,search:async record=>[{id:'1',body:record.password==='test-a'?'Code 111222':'Code 333444',timestamp:Date.now()}]});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const url=`http://127.0.0.1:${server.address().port}/api/mail`;
+  const a=randomBytes(32).toString('base64url'),b=randomBytes(32).toString('base64url');
+  const send=async(token,body)=>await (await fetch(url,{method:'POST',headers:{Origin:origin,Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  try {
+    const connect=password=>({command:'connect',consent:true,provider:'yandex',email:'same@yandex.ru',password});
+    const accountA=(await send(a,connect('test-a'))).account,accountB=(await send(b,connect('test-b'))).account;
+    assert.notEqual(accountA.id,accountB.id);
+    assert.deepEqual((await send(a,{command:'list'})).accounts,[accountA]);
+    assert.deepEqual((await send(b,{command:'list'})).accounts,[accountB]);
+    for(const command of ['search','remove'])assert.equal((await send(b,{command,id:accountA.id})).error,'MAIL_ACCOUNT_MISSING');
+    assert.match((await send(a,{command:'search',id:accountA.id})).messages[0].body,/111222/);
+    assert.match((await send(b,{command:'search',id:accountB.id})).messages[0].body,/333444/);
+    await send(a,{command:'remove',id:accountA.id});
+    assert.deepEqual(await vault.read(ownerId(a)),[]);
+    assert.equal((await vault.read(ownerId(b))).length,1);
+    assert.equal((await readdir(directory)).filter(name=>name.endsWith('.enc')).length,1);
+    assert.match((await send(b,{command:'search',id:accountB.id})).messages[0].body,/333444/);
+  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});}
+});

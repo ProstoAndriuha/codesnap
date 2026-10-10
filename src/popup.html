@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">0.8.1</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">0.8.2</span></div>
     <p data-i18n="tagline">Your email codes, exactly where you need them.</p>
   </header>
 
@@ -26,7 +26,7 @@
       <label class="sr-only" for="account" data-i18n="chooseAccount">Choose Gmail account</label>
       <select id="account"><option value="all" data-i18n="allAccounts">All connected accounts</option></select>
       <label class="sr-only" for="provider">Почтовый сервис</label>
-      <select id="provider"><option value="gmail">Google / Gmail</option><option value="yahoo">Yahoo</option><option value="yandex">Яндекс</option><option value="mailru">Mail.ru</option><option value="imap">Другая почта / ручной IMAP</option></select>
+      <select id="provider" hidden><option value="gmail">Google / Gmail</option><option value="yahoo">Yahoo</option><option value="yandex">Яндекс</option><option value="mailru">Mail.ru</option><option value="imap">Другая почта / ручной IMAP</option></select>
       <div class="account-actions"><button class="secondary" id="connect" type="button" data-i18n="connectGmail">Connect mail</button><button class="text-button" id="removeAccount" type="button" data-i18n="removeSelected" hidden>Remove selected</button></div>
       <p class="subtle" id="accounts" role="status" aria-live="polite" data-i18n="connectPrompt">Connect Gmail to find your codes.</p>
       <form id="mailForm" class="mail-form" hidden>
@@ -46,7 +46,7 @@
         <button id="saveMail" class="secondary" type="submit" data-i18n="mailCloudConnect">Подключить почту</button>
         </details>
       </form>
-      <p class="subtle"><span data-i18n="privacyDisclaimer">Gmail connects directly to Google. Optional CodeSnap Cloud processes recent IMAP mail and stores credentials encrypted on our server. No sending or deleting emails.</span> <a href="https://prostoandriuha.github.io/codesnap/privacy.html" target="_blank" rel="noopener noreferrer" data-i18n="privacyLink">Privacy</a></p>
+      <p class="subtle"><span id="directMailPrivacy" data-i18n="directMailPrivacy">Gmail connects directly to Google. CodeSnap never sends or deletes emails.</span><span id="cloudMailPrivacy" data-i18n="privacyDisclaimer" hidden>Gmail connects directly to Google. Optional CodeSnap Cloud processes recent IMAP mail and stores credentials encrypted on our server. No sending or deleting emails.</span> <a href="https://prostoandriuha.github.io/codesnap/privacy.html" target="_blank" rel="noopener noreferrer" data-i18n="privacyLink">Privacy</a></p>
     </section>
 
     <section class="card auto-card">
@@ -57,7 +57,7 @@
     <section class="card settings-card">
       <details><summary data-i18n="settingsTitle">Settings</summary>
         <label class="setting-check"><input id="mailCloudEnabled" type="checkbox"><span><strong data-i18n="mailCloudTitle">Почта через CodeSnap Cloud</strong><small data-i18n="mailCloudDescription">Яндекс, Mail.ru, Yahoo и IMAP без установки программ. Gmail подключается напрямую.</small></span></label>
-        <p class="subtle" data-i18n="mailCloudStorage">Пароли приложений шифруются на сервере CodeSnap. Письма обрабатываются для поиска кодов, не сохраняются на диск. При отключении Cloud чтение приостанавливается; удалить данные можно кнопкой «Удалить выбранный».</p>
+        <p id="cloudStorageDetails" class="subtle" data-i18n="mailCloudStorage" hidden>Пароли приложений шифруются на сервере CodeSnap. Письма обрабатываются для поиска кодов, не сохраняются на диск. При отключении Cloud чтение приостанавливается; удалить данные можно кнопкой «Удалить выбранный».</p>
         <label class="setting-check"><input id="detailedPopup" type="checkbox"><span><strong data-i18n="detailedPopupTitle">Detailed popup</strong><small data-i18n="detailedPopupDescription">Show code, sender, account and time beside the field.</small></span></label>
       </details>
     </section>

@@ -21,6 +21,7 @@ async function manageMail(payload) {
 }
 
 function configureProvider() {
+  if (!$('mailCloudEnabled').checked) $('provider').value = 'gmail';
   const provider = $('provider').value;
   const preset = MAIL_PROVIDERS[provider];
   $('mailForm').hidden = !preset;
@@ -40,14 +41,28 @@ function configureProvider() {
   $('mailCredentialsTitle').hidden = provider !== 'yandex';
 }
 
+function renderCloudAvailability() {
+  const enabled = $('mailCloudEnabled').checked;
+  $('provider').hidden = !enabled;
+  $('cloudMailPrivacy').hidden = !enabled;
+  $('directMailPrivacy').hidden = enabled;
+  $('cloudStorageDetails').hidden = !enabled;
+  for (const option of $('provider').options) if (option.value !== 'gmail') option.disabled = !enabled;
+  if (!enabled) {
+    $('provider').value = 'gmail';
+    $('mailForm').hidden = true;
+    $('mailPassword').value = '';
+    $('mailConsent').checked = false;
+  }
+}
+
 async function enableMailWithConsent() {
+  if (!$('mailCloudEnabled').checked) return false;
   if (!$('mailConsent').checked) {
     $('accounts').textContent = t('mailCloudConsentRequired', 'Подтвердите чтение писем сервером CodeSnap галочкой в форме подключения.');
     $('mailConsent').focus();
     return false;
   }
-  await chrome.storage.local.set({ mailCloudEnabled: true });
-  $('mailCloudEnabled').checked = true;
   return true;
 }
 
@@ -122,6 +137,7 @@ async function useCode() {
   if (!current || !candidateIsFresh(current)) { show('That code expired. Check again.', true); return; }
   const selected = current;
   await refreshFieldStatus();
+  if (selected.accountProvider && selected.accountProvider !== 'gmail' && !$('mailCloudEnabled').checked) { show('Cloud mail is disabled.'); return; }
   if (fieldStatus?.channel === 'authenticator' || fieldStatus?.channel === 'sms') { show('This field needs a different kind of code.'); return; }
   if (fieldStatus?.detected) {
     const inserted = await chrome.runtime.sendMessage({ type: 'INSERT_POPUP', tabId: tab.id, origin, sessionId: selected.sessionId });
@@ -152,10 +168,11 @@ async function refreshAccounts() {
   $('account').replaceChildren(new Option(t('allAccounts', 'All connected accounts'), 'all'));
   if (accounts.primaryEmail) $('account').append(new Option(accounts.primaryEmail, 'primary'));
   for (const extra of accounts.extras) $('account').append(new Option(extra.email, `extra:${extra.email}`));
-  for (const account of accounts.mailAccounts ?? []) $('account').append(new Option(`${account.email} · ${MAIL_PROVIDERS[account.provider]?.name ?? 'IMAP'}`, `mail:${account.id}`));
+  const mailAccounts = $('mailCloudEnabled').checked ? accounts.mailAccounts ?? [] : [];
+  for (const account of mailAccounts) $('account').append(new Option(`${account.email} · ${MAIL_PROVIDERS[account.provider]?.name ?? 'IMAP'}`, `mail:${account.id}`));
   $('account').value = [...$('account').options].some(option => option.value === selected) ? selected : 'all';
   $('removeAccount').hidden = !/^(?:extra|mail):/.test($('account').value);
-  const count = Number(Boolean(accounts.primaryEmail)) + accounts.extras.length + (accounts.mailAccounts?.length ?? 0);
+  const count = Number(Boolean(accounts.primaryEmail)) + accounts.extras.length + mailAccounts.length;
   $('accounts').textContent = count ? `${count} account${count === 1 ? '' : 's'} connected. Use the same button to add another.` : t('connectPrompt', 'Connect Gmail to find your codes.');
   return accounts;
 }
@@ -166,6 +183,7 @@ async function init() {
   if (manifest?.version && $('appVersion')) $('appVersion').textContent = manifest.version;
   const { autoWatch, detailedPopup, mailCloudEnabled } = await chrome.storage.local.get(['autoWatch', 'detailedPopup', 'mailCloudEnabled']);
   $('mailCloudEnabled').checked = mailCloudEnabled === true;
+  renderCloudAvailability();
   $('detailedPopup').checked = detailedPopup === true;
   $('autoWatch').checked = autoWatch !== false;
   $('autoState').textContent = autoWatch === false ? 'Paused' : 'On by default';
@@ -181,6 +199,7 @@ async function init() {
 $('connect').addEventListener('click', async () => {
   const provider = $('provider').value;
   if (provider !== 'gmail') {
+    if (!$('mailCloudEnabled').checked) return;
     if ($('mailForm').hidden) { configureProvider(); $('mailEmail').focus(); }
     else if (provider === 'yandex') $('connectYandex').click();
     else $('mailForm').requestSubmit();
@@ -241,8 +260,11 @@ $('connectYandex').addEventListener('click', async () => {
   finally { $('connectYandex').disabled = false; }
 });
 $('mailCloudEnabled').addEventListener('change', async () => {
+  renderCloudAvailability();
+  searchGeneration++; current = null;
   await chrome.storage.local.set({ mailCloudEnabled: $('mailCloudEnabled').checked });
   await refreshAccounts();
+  void searchLatest();
 });
 $('imapSecurity').addEventListener('change', () => {
   if ($('imapSecurity').value === 'starttls' && $('imapPort').value === '993') $('imapPort').value = '143';

@@ -159,7 +159,7 @@
     "message": "LATEST"
   },
   "mailCloudTitle": {
-    "message": "Mail through our server"
+    "message": "Mail through CodeSnap Cloud"
   },
   "mailCloudDescription": {
     "message": "Yandex, Mail.ru, Yahoo and IMAP without installing programs. Gmail connects directly."
@@ -187,5 +187,8 @@
   },
   "mailPasswordAlternative": {
     "message": "Alternative: app password"
+  },
+  "directMailPrivacy": {
+    "message": "Gmail connects directly to Google. CodeSnap never sends or deletes emails."
   }
 }

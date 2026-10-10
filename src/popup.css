@@ -72,6 +72,7 @@ select:focus-visible,button:focus-visible,.switch input:focus-visible+.slider{ou
 .mail-form .setting-check{display:flex;align-items:flex-start;gap:8px}
 .mail-form input[type=checkbox]{flex:none;width:16px;height:16px;margin:2px 0 0;padding:0;accent-color:#546be9}
 .mail-form summary[hidden]{display:none}
+#provider[hidden],#cloudMailPrivacy[hidden],#directMailPrivacy[hidden],#cloudStorageDetails[hidden]{display:none}
 .mail-form button,.microsoft-settings button{margin-top:11px}
 .mail-form details,.microsoft-settings{margin-top:12px}
 .mail-form summary,.microsoft-settings summary{font-size:11px;color:#5369e8;cursor:pointer}

@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { connectYandex, mailHost, listMailAccounts } from '../src/mail-bridge.js';
 const redirect='https://ongiekgidmkffdhgmjmlnjjgoggojoak.chromiumapp.org/yandex';
+test('disabling Cloud during a request discards its late account and code responses',async()=>{
+  const prior={chrome:globalThis.chrome,fetch:globalThis.fetch}; let enabled=true;
+  globalThis.chrome={storage:{local:{get:async()=>({mailCloudEnabled:enabled,mailCloudToken:'a'.repeat(43)})}}};
+  globalThis.fetch=async()=>({ok:true,json:async()=>{enabled=false;return {ok:true,accounts:[{email:'private@example.com'}],messages:[{body:'private code'}]};}});
+  try {
+    assert.deepEqual((await mailHost({command:'list'})).accounts,[]);
+    enabled=true;await assert.rejects(mailHost({command:'search',id:'private'}),/MAIL_CLOUD_DISABLED/);
+  }finally{Object.assign(globalThis,prior);}
+});
 test('Yandex official auth callback is bound to exact redirect/state and exchange stays in service worker',async()=>{
   const prior={chrome:globalThis.chrome,fetch:globalThis.fetch};
   const requests=[]; const writes=[];
