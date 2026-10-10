@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="appName">CodeSnap</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">0.7.2</span></div>
+    <p data-i18n="tagline">Your email codes, exactly where you need them.</p>
+  </header>
+
+  <main>
+    <section class="card site-card" aria-labelledby="site">
+      <div class="section-top"><span class="eyebrow" data-i18n="currentWebsite">CURRENT WEBSITE</span><span class="badge" id="fieldBadge" data-i18n="badgeChecking">Checking</span></div>
+      <h1 id="site" data-i18n="checkingPage">Checking the page…</h1>
+      <p class="supporting" id="fieldType" data-i18n="lookingForField">Looking for a verification field</p>
+      <div id="result" class="result" role="status" aria-live="polite" data-i18n="lookingForCode">Looking for your code…</div>
+      <button class="quiet-search" id="search" type="button" data-i18n="checkAgain" hidden>↻ Check again</button>
+    </section>
+
+    <section class="card accounts-card" aria-labelledby="accountsTitle">
+      <div class="section-top"><h2 id="accountsTitle" data-i18n="gmailAccounts">Gmail accounts</h2><span class="quiet-icon" aria-hidden="true">✉</span></div>
+      <label class="sr-only" for="account" data-i18n="chooseAccount">Choose Gmail account</label>
+      <select id="account"><option value="all" data-i18n="allAccounts">All connected accounts</option></select>
+      <label class="sr-only" for="provider">Почтовый сервис</label>
+      <select id="provider"><option value="gmail">Google / Gmail</option><option value="yahoo">Yahoo</option><option value="yandex">Яндекс</option><option value="mailru">Mail.ru</option><option value="imap">Другая почта / ручной IMAP</option></select>
+      <div class="account-actions"><button class="secondary" id="connect" type="button" data-i18n="connectGmail">Connect mail</button><button class="text-button" id="removeAccount" type="button" data-i18n="removeSelected" hidden>Remove selected</button></div>
+      <form id="mailForm" class="mail-form" hidden>
+        <label for="mailEmail">Адрес почты</label><input id="mailEmail" type="email" autocomplete="off" required placeholder="name@example.com">
+        <label for="mailPassword">Пароль приложения</label><input id="mailPassword" type="password" autocomplete="off" required>
+        <p class="subtle">Создайте отдельный пароль приложения в настройках вашей почты.</p><a id="mailHelp" class="text-button" target="_blank" rel="noopener noreferrer">Как получить пароль приложения</a>
+        <details id="imapAdvanced"><summary>Настройки сервера</summary>
+          <label for="imapHost">IMAP-сервер</label><input id="imapHost" autocomplete="off" placeholder="imap.example.com">
+          <label for="imapPort">Порт</label><input id="imapPort" type="number" min="1" max="65535" value="993">
+          <label for="imapSecurity">Защищённое соединение</label><select id="imapSecurity"><option value="tls">SSL/TLS</option><option value="starttls">STARTTLS</option></select>
+          <label for="imapLogin">Логин, если отличается от адреса</label><input id="imapLogin" autocomplete="off">
+        </details>
+        <button id="saveMail" class="secondary" type="submit">Проверить и подключить</button>
+      </form>
+      <p class="subtle" id="accounts" data-i18n="connectPrompt">Connect Gmail to find your codes.</p>
+      <p class="subtle"><span data-i18n="privacyDisclaimer">CodeSnap reads recent mail to find codes. IMAP credentials stay encrypted on this computer. CodeSnap does not send or delete messages.</span> <a href="https://prostoandriuha.github.io/codesnap/privacy.html" target="_blank" rel="noopener noreferrer" data-i18n="privacyLink">Privacy</a></p>
+    </section>
+
+    <section class="card auto-card">
+      <div><div class="auto-title"><span data-i18n="codesBesideFields">Codes beside fields</span> <span class="mini-pro">PRO</span></div><p class="subtle" data-i18n="autoAppear">Appear automatically. Tap the code to insert it.</p><p class="auto-state" id="autoState"></p></div>
+      <label class="switch" aria-label="Show email codes beside fields automatically"><input id="autoWatch" type="checkbox"><span class="slider"></span></label>
+    </section>
+
+    <section class="card settings-card">
+      <details><summary data-i18n="settingsTitle">Settings</summary>
+        <label class="setting-check"><input id="detailedPopup" type="checkbox"><span><strong data-i18n="detailedPopupTitle">Detailed popup</strong><small data-i18n="detailedPopupDescription">Show code, sender, account and time beside the field.</small></span></label>
+      </details>
+    </section>
+
+    <section class="pro-card" aria-label="CodeSnap Pro preview">
+      <div class="pro-top"><span class="pro-logo">✦</span><span>CodeSnap <strong>Pro</strong></span><span class="preview-pill">PREVIEW</span></div>
+      <p data-i18n="proHeadline">Everything that makes verification effortless.</p>
+      <div class="pro-features"><span data-i18n="proFeatAccounts">✓ Multiple Gmail accounts</span><span data-i18n="proFeatBeside">✓ Codes beside fields</span><span data-i18n="proFeatSpeed">✓ Faster active search</span><span data-i18n="proFeatMatch">✓ Advanced matching</span><span data-i18n="proFeatAdFree">✓ Ad-free at launch</span></div>
+      <p class="pro-note" data-i18n="proNote">Pro features are unlocked in this test build. Payments are not available yet.</p>
+    </section>
+    <p class="footer-note" id="trust" data-i18n="footerTrust">CodeSnap never submits the website form for you.</p>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

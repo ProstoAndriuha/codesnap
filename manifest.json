@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_appName__",
+  "version": "0.7.2",
+  "description": "__MSG_appDescription__",
+  "default_locale": "en",
+  "permissions": [
+    "identity",
+    "activeTab",
+    "storage",
+    "offscreen",
+    "clipboardWrite",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://gmail.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "134116028146-e8kuhu4o1s5fgege6m3lgjf82o749pbq.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "CodeSnap",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*"
+      ],
+      "js": [
+        "src/fields.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAooWPSgo/8a6u6Nh2n8t9OA3wdByDQoIyPqnWJugtQ5bYr0Egr3tpNQNqQYsou7H79r3p8TVgfcvFoCqjF0Yl6L/D9Zc2H7WY69BayxKuuN0MoBDm70xxpJoyMGDGl5kEWpwox1l2JN99uPzBx/smyDE2yEdYEgpjc3xSn2oA/ff8grQvcZGMpUh7K40jU0U4KucZrPQTbI3b/IhSWHp9XBfUIOaH+lSUbzJlV3NZ4HDxnJ7ITI5d3YXpKp47/aBo5VOhGVjTnCLLttedA/fX56cR9aomjH0pDvl++3iX/w9WrFfzBLdv8mFZWVxxjUy8Gi6zT1v9XR4HeI461+5pxwIDAQAB"
+}

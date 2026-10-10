@@ -1,0 +1,161 @@
+{
+  "appName": {
+    "message": "CodeSnap – Gmail & Email Verification Codes"
+  },
+  "appDescription": {
+    "message": "Find email verification codes from Gmail and fill OTP fields with one click. Optional IMAP support on Windows."
+  },
+  "tagline": {
+    "message": "Your email codes, exactly where you need them."
+  },
+  "currentWebsite": {
+    "message": "CURRENT WEBSITE"
+  },
+  "checkingPage": {
+    "message": "Checking the page…"
+  },
+  "lookingForField": {
+    "message": "Looking for a verification field"
+  },
+  "lookingForCode": {
+    "message": "Looking for your code…"
+  },
+  "checkAgain": {
+    "message": "↻ Check again"
+  },
+  "badgeChecking": {
+    "message": "Checking"
+  },
+  "badge2fa": {
+    "message": "2FA app"
+  },
+  "badgeSms": {
+    "message": "SMS"
+  },
+  "badgeReady": {
+    "message": "Email code ready"
+  },
+  "badgeFound": {
+    "message": "Code field found"
+  },
+  "badgeManual": {
+    "message": "Manual search"
+  },
+  "desc2fa": {
+    "message": "This field needs a code from an authenticator app."
+  },
+  "descSms": {
+    "message": "This field needs a text-message code."
+  },
+  "descEmail": {
+    "message": "A matching email code can appear beside the field."
+  },
+  "descUnknown": {
+    "message": "Check the requested code source before using Gmail."
+  },
+  "descManual": {
+    "message": "No code field yet. You can still search Gmail."
+  },
+  "tapToInsert": {
+    "message": "Tap to insert ↗"
+  },
+  "tapToCopy": {
+    "message": "Tap to copy ↗"
+  },
+  "codeInserted": {
+    "message": "Code inserted. Finish on the website."
+  },
+  "codeCopied": {
+    "message": "Code copied. Paste it into the website."
+  },
+  "gmailAccounts": {
+    "message": "Mail accounts"
+  },
+  "chooseAccount": {
+    "message": "Choose mail account"
+  },
+  "allAccounts": {
+    "message": "All connected accounts"
+  },
+  "connectGmail": {
+    "message": "Connect mail"
+  },
+  "removeSelected": {
+    "message": "Remove selected"
+  },
+  "connectPrompt": {
+    "message": "Connect a mail account to find your codes."
+  },
+  "privacyDisclaimer": {
+    "message": "CodeSnap reads recent mail to find codes. IMAP credentials stay encrypted on this computer. CodeSnap does not send or delete messages."
+  },
+  "privacyLink": {
+    "message": "Privacy"
+  },
+  "codesBesideFields": {
+    "message": "Codes beside fields"
+  },
+  "autoAppear": {
+    "message": "Appear automatically. Tap the code to insert it."
+  },
+  "proHeadline": {
+    "message": "Everything that makes verification effortless."
+  },
+  "proFeatAccounts": {
+    "message": "✓ Multiple mail accounts"
+  },
+  "proFeatBeside": {
+    "message": "✓ Codes beside fields"
+  },
+  "proFeatSpeed": {
+    "message": "✓ Faster active search"
+  },
+  "proFeatMatch": {
+    "message": "✓ Advanced matching"
+  },
+  "proFeatAdFree": {
+    "message": "✓ Ad-free at launch"
+  },
+  "proNote": {
+    "message": "Pro features are unlocked in this test build. Payments are not available yet."
+  },
+  "footerTrust": {
+    "message": "CodeSnap never submits the website form for you."
+  },
+  "inlineChoose": {
+    "message": "Choose the email you requested"
+  },
+  "inlineJustNow": {
+    "message": "just now"
+  },
+  "settingsTitle": {
+    "message": "Settings"
+  },
+  "inlineFill": {
+    "message": "Fill"
+  },
+  "detailedPopupDescription": {
+    "message": "Show code, sender, account and time beside the field."
+  },
+  "inlineChooseShort": {
+    "message": "Choose"
+  },
+  "inlineMinutesAgo": {
+    "message": "min ago"
+  },
+  "inlineExpired": {
+    "message": "Code expired. Search again."
+  },
+  "detailedPopupTitle": {
+    "message": "Detailed popup"
+  },
+  "inlineFailed": {
+    "message": "Could not insert"
+  },
+  "inlineReview": {
+    "message": "Check sender and subject before inserting"
+  },
+  "inlineLatest": {
+    "message": "LATEST"
+  }
+}

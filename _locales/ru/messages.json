@@ -1,0 +1,161 @@
+{
+  "appName": {
+    "message": "CodeSnap – коды подтверждения из почты"
+  },
+  "appDescription": {
+    "message": "Находите коды подтверждения в Gmail и вставляйте одним нажатием. Другие почтовые сервисы — через IMAP на Windows."
+  },
+  "tagline": {
+    "message": "Ваши коды из почты прямо там, где они нужны."
+  },
+  "currentWebsite": {
+    "message": "ТЕКУЩИЙ САЙТ"
+  },
+  "checkingPage": {
+    "message": "Проверка страницы…"
+  },
+  "lookingForField": {
+    "message": "Поиск поля подтверждения"
+  },
+  "lookingForCode": {
+    "message": "Поиск кода в почте…"
+  },
+  "checkAgain": {
+    "message": "↻ Проверить снова"
+  },
+  "badgeChecking": {
+    "message": "Проверка"
+  },
+  "badge2fa": {
+    "message": "Приложение 2FA"
+  },
+  "badgeSms": {
+    "message": "СМС"
+  },
+  "badgeReady": {
+    "message": "Код из почты готов"
+  },
+  "badgeFound": {
+    "message": "Поле кода найдено"
+  },
+  "badgeManual": {
+    "message": "Ручной поиск"
+  },
+  "desc2fa": {
+    "message": "Это поле требует код из приложения-аутентификатора."
+  },
+  "descSms": {
+    "message": "Это поле требует код из СМС-сообщения."
+  },
+  "descEmail": {
+    "message": "Подходящий код из письма появится рядом с полем."
+  },
+  "descUnknown": {
+    "message": "Убедитесь в источнике кода перед поиском в Gmail."
+  },
+  "descManual": {
+    "message": "Поле кода пока не обнаружено. Можно поискать в Gmail."
+  },
+  "tapToInsert": {
+    "message": "Вставить ↗"
+  },
+  "tapToCopy": {
+    "message": "Скопировать ↗"
+  },
+  "codeInserted": {
+    "message": "Код вставлен. Завершите действие на сайте."
+  },
+  "codeCopied": {
+    "message": "Код скопирован. Вставьте его в поле на сайте."
+  },
+  "gmailAccounts": {
+    "message": "Почтовые аккаунты"
+  },
+  "chooseAccount": {
+    "message": "Выбрать почтовый аккаунт"
+  },
+  "allAccounts": {
+    "message": "Все подключенные аккаунты"
+  },
+  "connectGmail": {
+    "message": "Подключить почту"
+  },
+  "removeSelected": {
+    "message": "Удалить выбранный"
+  },
+  "connectPrompt": {
+    "message": "Подключите почту, чтобы находить коды."
+  },
+  "privacyDisclaimer": {
+    "message": "CodeSnap читает недавние письма для поиска кодов. Пароли приложений IMAP хранятся зашифрованными на этом компьютере. Расширение не отправляет и не удаляет письма."
+  },
+  "privacyLink": {
+    "message": "Конфиденциальность"
+  },
+  "codesBesideFields": {
+    "message": "Коды рядом с полями"
+  },
+  "autoAppear": {
+    "message": "Появляются автоматически. Нажмите на код для вставки."
+  },
+  "proHeadline": {
+    "message": "Всё для мгновенного и удобного подтверждения."
+  },
+  "proFeatAccounts": {
+    "message": "✓ Несколько почтовых аккаунтов"
+  },
+  "proFeatBeside": {
+    "message": "✓ Коды рядом с полями"
+  },
+  "proFeatSpeed": {
+    "message": "✓ Быстрый активный поиск"
+  },
+  "proFeatMatch": {
+    "message": "✓ Улучшенное распознавание"
+  },
+  "proFeatAdFree": {
+    "message": "✓ Без рекламы"
+  },
+  "proNote": {
+    "message": "Pro-функции разблокированы в этой сборке. Оплата пока не требуется."
+  },
+  "footerTrust": {
+    "message": "CodeSnap никогда не отправляет форму за вас."
+  },
+  "inlineChoose": {
+    "message": "Выберите письмо с нужным кодом"
+  },
+  "inlineJustNow": {
+    "message": "только что"
+  },
+  "settingsTitle": {
+    "message": "Настройки"
+  },
+  "inlineFill": {
+    "message": "Вставить"
+  },
+  "detailedPopupDescription": {
+    "message": "Код, отправитель, аккаунт и время рядом с полем."
+  },
+  "inlineChooseShort": {
+    "message": "Выбрать"
+  },
+  "inlineMinutesAgo": {
+    "message": "мин назад"
+  },
+  "inlineExpired": {
+    "message": "Код истёк. Найдите новый."
+  },
+  "detailedPopupTitle": {
+    "message": "Подробная всплывашка"
+  },
+  "inlineFailed": {
+    "message": "Не удалось вставить"
+  },
+  "inlineReview": {
+    "message": "Проверьте отправителя и тему перед вставкой"
+  },
+  "inlineLatest": {
+    "message": "НОВЫЙ"
+  }
+}

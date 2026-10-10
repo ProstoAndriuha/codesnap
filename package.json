@@ -1,0 +1,25 @@
+{
+  "name": "codesnap",
+  "private": true,
+  "version": "0.7.2",
+  "type": "module",
+  "scripts": {
+    "lint": "node scripts/lint.js",
+    "test": "node --test",
+    "browser-smoke": "node scripts/browser-smoke.js",
+    "build": "node scripts/build.js",
+    "build:firefox": "node scripts/build-firefox.js",
+    "release:chrome": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-chrome.ps1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "playwright-core": "^1.63.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "react-hook-form": "^7.62.0",
+    "react-otp-input": "^3.1.1"
+  }
+}
