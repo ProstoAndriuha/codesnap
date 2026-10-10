@@ -42,9 +42,6 @@ foreach ($file in Get-ChildItem -LiteralPath $distRoot -Recurse -File) {
     }
 }
 Write-Output "Installed folder updated: $installedRoot. Reload CodeSnap in Chrome."
-if (Test-Path -LiteralPath (Join-Path $sourceRoot 'native\mail_host.py')) {
-    & (Join-Path $PSScriptRoot 'install-mail-helper.ps1')
-}
 Write-Output "Chrome package: $outputPath (version $($manifest.version))"
 $sha = [Security.Cryptography.SHA256]::Create()
 $fileStream = [IO.File]::OpenRead($outputPath)

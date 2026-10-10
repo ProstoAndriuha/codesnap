@@ -1,11 +1,11 @@
 {
   "name": "codesnap",
   "private": true,
-  "version": "0.7.2",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "lint": "node scripts/lint.js",
-    "test": "node --test",
+    "test": "node scripts/test.js",
     "browser-smoke": "node scripts/browser-smoke.js",
     "build": "node scripts/build.js",
     "build:firefox": "node scripts/build-firefox.js",

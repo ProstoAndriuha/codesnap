@@ -1,0 +1,1 @@
+{"name":"codesnap-mail","version":"0.8.0","private":true,"type":"module","engines":{"node":">=20"},"scripts":{"start":"node src/server.js","test":"node --test","check":"node --check src/server.js"},"dependencies":{"imapflow":"2.4.0","mailparser":"3.9.38","ipaddr.js":"2.5.0"}}

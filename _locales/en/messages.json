@@ -3,7 +3,7 @@
     "message": "CodeSnap – Gmail & Email Verification Codes"
   },
   "appDescription": {
-    "message": "Find email verification codes from Gmail and fill OTP fields with one click. Optional IMAP support on Windows."
+    "message": "Find Gmail and Yandex email codes and fill OTP fields with one click. Optional Cloud IMAP without installing programs."
   },
   "tagline": {
     "message": "Your email codes, exactly where you need them."
@@ -87,7 +87,7 @@
     "message": "Connect a mail account to find your codes."
   },
   "privacyDisclaimer": {
-    "message": "CodeSnap reads recent mail to find codes. IMAP credentials stay encrypted on this computer. CodeSnap does not send or delete messages."
+    "message": "Gmail connects directly to Google. Optional CodeSnap Cloud processes recent IMAP mail and stores credentials encrypted on our server. No sending or deleting emails."
   },
   "privacyLink": {
     "message": "Privacy"
@@ -157,5 +157,32 @@
   },
   "inlineLatest": {
     "message": "LATEST"
+  },
+  "mailCloudTitle": {
+    "message": "Mail through CodeSnap Cloud"
+  },
+  "mailCloudDescription": {
+    "message": "Yandex, Mail.ru, Yahoo and IMAP without installing programs. Gmail connects directly."
+  },
+  "mailCloudStorage": {
+    "message": "App passwords and OAuth tokens are encrypted on the CodeSnap server. Mail is processed in memory, not saved to disk. Turning Cloud off pauses access; remove each account first to delete its stored credentials."
+  },
+  "mailCloudConsent": {
+    "message": "I allow CodeSnap Cloud to store my connection credentials encrypted and read recent mail to find codes. Removing the account deletes its stored connection data."
+  },
+  "mailCloudConnect": {
+    "message": "Connect through CodeSnap Cloud"
+  },
+  "mailCloudEnableFirst": {
+    "message": "Enable Mail through CodeSnap Cloud in Settings below, then confirm the connection in the form."
+  },
+  "mailCloudConsentRequired": {
+    "message": "Enable CodeSnap Cloud and confirm the connection below."
+  },
+  "connectYandexOAuth": {
+    "message": "Sign in with Yandex"
+  },
+  "yandexOAuthHint": {
+    "message": "Confirm CodeSnap Cloud below and sign in on the official Yandex page. App password is an alternative."
   }
 }

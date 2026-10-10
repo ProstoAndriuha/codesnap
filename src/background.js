@@ -2,7 +2,7 @@ import { siteForOrigin, trustedOrigin, normalizeSender, rankCandidates, candidat
 import { findMessages, findHistoryMessages, getGmailHistoryId } from './gmail.js';
 import { SessionStore } from './sessions.js';
 import { getAccessTokens, forgetAdditional } from './auth.js';
-import { mailHost, listMailAccounts, describeMailError } from './mail-bridge.js';
+import { mailHost, listMailAccounts, describeMailError, connectYandex } from './mail-bridge.js';
 
 const sessions = new SessionStore();
 const errors = {
@@ -63,8 +63,12 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
     if (selected === 'all' || selected === 'primary' || selected.startsWith('extra:')) {
       try { accounts = await getAccessTokens(selected); } catch (error) { googleError = error; }
     }
-    const mailAccounts = (await listMailAccounts()).filter(account => selected === 'all' || selected === `mail:${account.id}`);
-    if (!accounts.length && !mailAccounts.length) throw googleError ?? new Error(selected.startsWith('mail:') ? 'MAIL_AUTH_FAILED' : 'AUTH_EXPIRED');
+    let mailAccounts = [], mailError = null;
+    if (selected === 'all' || selected.startsWith('mail:')) {
+      try { mailAccounts = (await listMailAccounts(true)).filter(account => selected === 'all' || selected === `mail:${account.id}`); }
+      catch (error) { mailError = error; }
+    }
+    if (!accounts.length && !mailAccounts.length) throw mailError ?? googleError ?? new Error(selected.startsWith('mail:') ? 'MAIL_AUTH_FAILED' : 'AUTH_EXPIRED');
     async function fetchAccounts(broad = false) {
       const nativePending = Promise.allSettled(mailAccounts.map(async account => {
         const result = await mailHost({ command: 'search', id: account.id, maxAgeSeconds: SEARCH_WINDOW_SECONDS });
@@ -183,6 +187,10 @@ async function selectCandidate({ tabId, frameId = 0, origin, sessionId, index })
 
 chrome.runtime.onMessage.addListener((request, sender, respond) => {
   (async () => {
+    if (request.type === 'MAIL_YANDEX_CONNECT') {
+      if (sender.url !== `chrome-extension://${chrome.runtime.id}/src/popup.html` || request.consent !== true) return { status: 'untrusted', message: 'Invalid page.' };
+      try { return { status: 'ok', ...await connectYandex() }; } catch (error) { return { status: 'error', message: describeMailError(error) }; }
+    }
     if (request.type === 'MAIL_ACCOUNT') {
       if (sender.url !== `chrome-extension://${chrome.runtime.id}/src/popup.html`) return { status: 'untrusted', message: 'Invalid page.' };
       if (!['list', 'connect', 'remove'].includes(request.payload?.command)) return { status: 'untrusted', message: 'Invalid request.' };

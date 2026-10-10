@@ -33,6 +33,9 @@ function configureProvider() {
   $('mailHelp').hidden = !help[provider];
   if (help[provider]) $('mailHelp').href = help[provider];
   $('mailPassword').value = '';
+  $('mailConsent').checked = false;
+  $('connectYandex').hidden = provider !== 'yandex';
+  $('yandexOAuthHint').hidden = provider !== 'yandex';
 }
 
 function applyI18n() {
@@ -148,7 +151,8 @@ async function init() {
   applyI18n();
   const manifest = chrome.runtime.getManifest?.();
   if (manifest?.version && $('appVersion')) $('appVersion').textContent = manifest.version;
-  const { autoWatch, detailedPopup } = await chrome.storage.local.get(['autoWatch', 'detailedPopup']);
+  const { autoWatch, detailedPopup, mailCloudEnabled } = await chrome.storage.local.get(['autoWatch', 'detailedPopup', 'mailCloudEnabled']);
+  $('mailCloudEnabled').checked = mailCloudEnabled === true;
   $('detailedPopup').checked = detailedPopup === true;
   $('autoWatch').checked = autoWatch !== false;
   $('autoState').textContent = autoWatch === false ? 'Paused' : 'On by default';
@@ -164,6 +168,11 @@ async function init() {
 $('connect').addEventListener('click', async () => {
   const provider = $('provider').value;
   if (provider !== 'gmail') {
+    if (!$('mailCloudEnabled').checked) {
+      $('accounts').textContent = t('mailCloudEnableFirst', 'Включите «Почта через CodeSnap Cloud» в настройках ниже, затем подтвердите подключение в форме.');
+      $('mailCloudEnabled').closest('details').open = true;
+      return;
+    }
     if ($('mailForm').hidden) { configureProvider(); $('mailEmail').focus(); }
     else $('mailForm').requestSubmit();
     return;
@@ -212,15 +221,35 @@ $('detailedPopup').addEventListener('change', async () => {
 });
 
 $('provider').addEventListener('change', configureProvider);
+$('connectYandex').addEventListener('click', async () => {
+  if (!$('mailConsent').checked || !$('mailCloudEnabled').checked) {
+    $('accounts').textContent = t('mailCloudConsentRequired', 'Включите CodeSnap Cloud и подтвердите подключение.');
+    $('mailCloudEnabled').closest('details').open = true; return;
+  }
+  $('connectYandex').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'MAIL_YANDEX_CONNECT', consent: true });
+    if (result?.status !== 'ok') throw new Error(result?.message ?? 'Не удалось войти через Яндекс.');
+    $('mailForm').hidden = true; await refreshAccounts(); $('accounts').textContent = `Подключено: ${result.account.email}`; void searchLatest();
+  } catch (error) { $('accounts').textContent = error.message; }
+  finally { $('connectYandex').disabled = false; }
+});
+$('mailCloudEnabled').addEventListener('change', async () => {
+  await chrome.storage.local.set({ mailCloudEnabled: $('mailCloudEnabled').checked });
+  await refreshAccounts();
+});
 $('imapSecurity').addEventListener('change', () => {
   if ($('imapSecurity').value === 'starttls' && $('imapPort').value === '993') $('imapPort').value = '143';
   else if ($('imapSecurity').value === 'tls' && $('imapPort').value === '143') $('imapPort').value = '993';
 });
 $('mailForm').addEventListener('submit', async event => {
   event.preventDefault(); $('saveMail').disabled = true;
+  if (!$('mailConsent').checked || !$('mailCloudEnabled').checked) {
+    $('accounts').textContent = t('mailCloudConsentRequired', 'Включите CodeSnap Cloud и подтвердите подключение.'); $('saveMail').disabled = false; return;
+  }
   const password = $('mailPassword').value; $('mailPassword').value = '';
   try {
-    const result = await manageMail({ command: 'connect', provider: $('provider').value, email: $('mailEmail').value.trim(), password, host: $('imapHost').value.trim(), port: Number($('imapPort').value), security: $('imapSecurity').value, login: $('imapLogin').value.trim() });
+    const result = await manageMail({ command: 'connect', consent: true, provider: $('provider').value, email: $('mailEmail').value.trim(), password, host: $('imapHost').value.trim(), port: Number($('imapPort').value), security: $('imapSecurity').value, login: $('imapLogin').value.trim() });
     $('mailForm').hidden = true; await refreshAccounts(); $('accounts').textContent = `Подключено: ${result.account.email}`; void searchLatest();
   } catch (error) { $('accounts').textContent = error.message; }
   finally { $('saveMail').disabled = false; }

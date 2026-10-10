@@ -3,24 +3,24 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
-test('native mail account search uses the same origin-bound insertion and preserves provider', async () => {
+test('cloud mail account search uses the same origin-bound insertion and preserves provider', async () => {
   const prior = { chrome: globalThis.chrome, fetch: globalThis.fetch, setInterval: globalThis.setInterval };
   let listener;
   const calls = [];
   globalThis.setInterval = () => 1;
   globalThis.chrome = {
-    runtime: { id: 'ongiekgidmkffdhgmjmlnjjgoggojoak', onMessage: { addListener(fn) { listener = fn; } }, sendNativeMessage: async (host, request) => {
-      calls.push(request);
-      assert.equal(host, 'com.codesnap.mail');
-      if (request.command === 'list') return { ok: true, accounts: [{ id: 'yahoo', email: 'owner@yahoo.com', provider: 'yahoo' }, { id: 'yandex', email: 'owner@yandex.ru', provider: 'yandex' }] };
-      if (request.command === 'search') return { ok: true, messages: [{ id: `mail:${request.id}`, from: 'codes@example.com', subject: 'Example verification code', body: 'Your verification code is 483921', timestamp: Date.now() }] };
-      return { ok: true };
-    } },
-    storage: { local: { get: async () => ({ accountSelections: {}, senders: {} }), set: async () => {} }, session: { get: async () => ({ extraAccounts: [] }) } },
+    runtime: { id: 'ongiekgidmkffdhgmjmlnjjgoggojoak', onMessage: { addListener(fn) { listener = fn; } } },
+    storage: { local: { get: async () => ({ accountSelections: {}, senders: {}, mailCloudEnabled: true, mailCloudToken: 'a'.repeat(43) }), set: async () => {} }, session: { get: async () => ({ extraAccounts: [] }) } },
     identity: { getAuthToken: async () => { throw new Error('no google'); } },
     tabs: { get: async () => ({ url: 'https://example.com/login' }), sendMessage: async (_id, request) => request.type === 'FIELD_STATUS' ? { origin: 'https://example.com', fieldId: 'field' } : { status: 'inserted' }, onRemoved: { addListener() {} }, onUpdated: { addListener() {} } }
   };
-  globalThis.fetch = async () => { throw new Error('Gmail must not be queried'); };
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'https://codesnap.fundingbotsecret.pp.ua/api/mail');
+    assert.equal(options.headers.Authorization, 'Bearer ' + 'a'.repeat(43));
+    const request = JSON.parse(options.body); calls.push(request);
+    const result = request.command === 'list' ? { ok:true,accounts:[{id:'yahoo',email:'owner@yahoo.com',provider:'yahoo'},{id:'yandex',email:'owner@yandex.ru',provider:'yandex'}] } : request.command === 'search' ? {ok:true,messages:[{id:'1',from:'codes@example.com',subject:'Example verification code',body:'Your verification code is 483921',timestamp:Date.now()}]} : {ok:true};
+    return {ok:true,json:async()=>result};
+  };
   try {
     await import(`../src/background.js?mail=${Math.random()}`);
     const send = (request, sender) => new Promise(resolve => listener(request, sender, resolve));
@@ -37,15 +37,15 @@ test('native mail account search uses the same origin-bound insertion and preser
   } finally { Object.assign(globalThis, prior); }
 });
 
-test('native helper failures are safe and do not expose server or credential text', async () => {
-  const prior = globalThis.chrome;
-  globalThis.chrome = { runtime: { sendNativeMessage: async () => { throw new Error('private server credentials'); } } };
+test('Cloud is opt-in and errors do not disclose credentials', async () => {
+  const prior=globalThis.chrome;
+  globalThis.chrome={storage:{local:{get:async()=>({mailCloudEnabled:false})}}};
   try {
-    const { mailHost, listMailAccounts, describeMailError } = await import('../src/mail-bridge.js');
-    await assert.rejects(mailHost({ command: 'list' }), /^Error: MAIL_HELPER_MISSING$/);
-    assert.deepEqual(await listMailAccounts(), []);
-    assert.doesNotMatch(describeMailError(new Error('private server credentials')), /private server credentials/);
-  } finally { globalThis.chrome = prior; }
+    const {mailHost,listMailAccounts,describeMailError}=await import('../src/mail-bridge.js');
+    assert.deepEqual(await listMailAccounts(),[]);
+    await assert.rejects(mailHost({command:'connect'}),/MAIL_CLOUD_DISABLED/);
+    assert.doesNotMatch(describeMailError(new Error('private server credentials')),/private server credentials/);
+  } finally {globalThis.chrome=prior;}
 });
 
 test('mail connection UI sends credentials only to extension service worker, then clears them', async () => {
@@ -68,6 +68,7 @@ test('mail connection UI sends credentials only to extension service worker, the
   $('provider').value = 'yahoo'; $('provider').dispatchEvent(new window.Event('change'));
   assert.equal($('mailForm').hidden, false);
   assert.equal($('imapHost').value, 'imap.mail.yahoo.com');
+  $('mailCloudEnabled').checked = true; $('mailConsent').checked = true;
   $('mailEmail').value = 'owner@yahoo.com'; $('mailPassword').value = 'fake-app-password';
   $('mailForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));

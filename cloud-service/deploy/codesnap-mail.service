@@ -1,0 +1,32 @@
+[Unit]
+Description=CodeSnap Cloud read-only mail bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codesnap-mail
+Group=codesnap-mail
+WorkingDirectory=/home/vps/projects/CodeSnap-Mail
+EnvironmentFile=/etc/codesnap-mail/service.env
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=35
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/codesnap-mail
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
