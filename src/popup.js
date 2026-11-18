@@ -17,6 +17,8 @@ let totpVault = null;
 let isSiteMuted = false;
 let liveTicker = null;
 let refreshingTotp = false;
+let authController = null;
+let activeMode = 'mail';
 
 function formatMMSS(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -288,32 +290,71 @@ function renderTotpBox(match) {
   if (!root) return;
   root.replaceChildren();
 
-  if (match?.status === 'found') {
+  const buildTotpCard = (item, includeDualBtn = false) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'totp-cand-wrap';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'totp-code-button';
     const top = document.createElement('div'); top.className = 'totp-row-top';
     const digits = document.createElement('span'); digits.className = 'totp-digits-text';
-    digits.textContent = match.code.replace(/^(.{3})(.{3})$/, '$1 $2');
-    const secBadge = document.createElement('span'); secBadge.id = 'totpSecLive'; secBadge.className = 'totp-sec';
-    secBadge.textContent = `${match.remainingSeconds}s`;
+    digits.textContent = String(item.code ?? '').replace(/^(.{3})(.{3})$/, '$1 $2');
+    const secBadge = document.createElement('span');
+    secBadge.className = 'totp-sec';
+    secBadge.setAttribute('data-totp-sec-id', item.id);
+    if (!includeDualBtn) secBadge.id = 'totpSecLive';
+    secBadge.textContent = `${item.remainingSeconds}s`;
     top.append(digits, secBadge);
 
     const progress = document.createElement('div'); progress.className = 'totp-progress';
-    const bar = document.createElement('div'); bar.id = 'totpProgressBar'; bar.className = 'totp-progress-bar';
-    bar.style.width = `${Math.round((match.remainingSeconds / (match.period || 30)) * 100)}%`;
+    const bar = document.createElement('div');
+    bar.className = 'totp-progress-bar';
+    bar.setAttribute('data-totp-bar-id', item.id);
+    if (!includeDualBtn) bar.id = 'totpProgressBar';
+    bar.style.width = `${Math.round((item.remainingSeconds / (item.period || 30)) * 100)}%`;
     progress.append(bar);
 
     const sub = document.createElement('div'); sub.className = 'totp-sub';
     const who = document.createElement('span');
-    who.textContent = `${match.issuer}${match.account ? ` · ${match.account}` : ''}`;
+    who.textContent = `${item.issuer}${item.account ? ` · ${item.account}` : ''}`;
     const act = document.createElement('span');
     act.textContent = (fieldStatus?.channel === 'authenticator' || fieldStatus?.has2faField) ? 'Вставить 2FA ↗' : 'Скопировать ↗';
     sub.append(who, act);
 
     btn.append(top, progress, sub);
-    btn.addEventListener('click', () => void useTotpCode(match));
-    root.append(btn);
+    btn.addEventListener('click', () => void useTotpCode(item));
+    wrap.append(btn);
+
+    if (includeDualBtn && current?.code && (fieldStatus?.isDualField || fieldStatus?.has2faField)) {
+      const dBtn = document.createElement('button');
+      dBtn.type = 'button';
+      dBtn.className = 'totp-dual-mini';
+      dBtn.textContent = `⚡ Почта + ${item.accountEmail || item.issuer}`;
+      dBtn.addEventListener('click', async () => {
+        const res = await chrome.runtime.sendMessage({
+          type: 'INSERT_DUAL_POPUP',
+          tabId: tab.id,
+          origin,
+          sessionId: current.sessionId,
+          siteContext: fieldStatus?.siteContext,
+          totpId: item.id
+        }).catch(() => null);
+        if (res?.status === 'inserted_dual') show(t('dualInserted', 'Both Email and 2FA codes inserted.'), true);
+        else showTotpStatus(res?.message ?? 'Не удалось вставить оба кода.', 'err');
+      });
+      wrap.append(dBtn);
+    }
+    return wrap;
+  };
+
+  if (match?.status === 'found') {
+    root.append(buildTotpCard(match, false));
+  } else if (match?.status === 'choose' && Array.isArray(match.candidates)) {
+    const info = document.createElement('p'); info.className = 'subtle';
+    info.textContent = `Найдено ${match.candidates.length} 2FA-аккаунта — выберите нужную почту:`;
+    const list = document.createElement('div'); list.className = 'totp-choose-list';
+    for (const cand of match.candidates) list.append(buildTotpCard(cand, true));
+    root.append(info, list);
   } else if (match?.status === 'locked') {
     const p = document.createElement('p'); p.className = 'subtle';
     p.textContent = `🔒 2FA (${match.account?.issuer ?? 'сейф'}) защищён PIN-кодом.`;
@@ -332,12 +373,12 @@ function renderTotpBox(match) {
         totpSiteMatch = res;
         renderTotpBox(res);
         updateDualFillVisibility();
-      } catch (err) { showTotpStatus(err.message); }
+      } catch (err) { showTotpStatus(err.message, 'err'); }
     });
     root.append(picker);
   } else {
     const p = document.createElement('p'); p.className = 'subtle';
-    p.textContent = 'Локальный 2FA-сейф (TOTP). Добавьте секрет или отсканируйте QR со страницы.';
+    p.textContent = 'Локальный 2FA-сейф (TOTP). Нажмите «Импорт», «+ Добавить» или «Сканировать QR».';
     root.append(p);
   }
 }
@@ -369,21 +410,61 @@ async function refreshTotp() {
   try {
     const res = await chrome.runtime.sendMessage({
       type: 'TOTP_ACTION',
-      payload: { command: 'status', origin, siteContext: fieldStatus?.siteContext }
+      payload: {
+        command: 'status',
+        tabId: tab?.id,
+        origin,
+        siteContext: fieldStatus?.siteContext,
+        matchedEmailAccount: current?.accountEmail ?? null
+      }
     });
     if (!res || res.status !== 'ok') return;
     totpVault = res;
     totpSiteMatch = res.siteMatch ?? { status: 'none' };
+    const badge = $('authCountBadge');
+    if (badge) { badge.textContent = String(res.count ?? 0); badge.hidden = !(res.count > 0); }
     $('totpLockBtn').hidden = !(res.pinProtected && res.unlocked);
     $('totpUnlockForm').hidden = !(res.pinProtected && !res.unlocked);
     renderTotpBox(totpSiteMatch);
     renderSavedTotpList();
     updateDualFillVisibility();
-    if (fieldStatus?.channel === 'authenticator' && totpSiteMatch.status === 'found') {
-      $('result').textContent = '2FA-код готов ниже ↓ Нажмите для вставки.';
+    if (fieldStatus?.channel === 'authenticator' && (totpSiteMatch.status === 'found' || totpSiteMatch.status === 'choose')) {
+      $('result').textContent = totpSiteMatch.status === 'choose'
+        ? 'Выберите нужный 2FA-аккаунт ниже ↓'
+        : '2FA-код готов ниже ↓ Нажмите для вставки.';
     }
   } catch { /* Ignore when background test stub doesn't handle TOTP_ACTION. */ }
   finally { refreshingTotp = false; }
+}
+
+async function switchMode(mode, initialDrawer = null) {
+  activeMode = mode;
+  $('modeMailBtn')?.classList.toggle('active', mode === 'mail');
+  $('modeAuthBtn')?.classList.toggle('active', mode === 'auth');
+  if ($('mailModeView')) $('mailModeView').hidden = mode !== 'mail';
+  if ($('authModeView')) $('authModeView').hidden = mode !== 'auth';
+
+  if (mode === 'auth') {
+    const host = $('authModeView');
+    if (!authController) {
+      const { mountAuthenticatorView } = await import('./authenticator.js');
+      authController = await mountAuthenticatorView(host, {
+        tab,
+        origin: origin ?? '',
+        siteContext: fieldStatus?.siteContext ?? {},
+        initialDrawer,
+        onCountChange: count => {
+          const badge = $('authCountBadge');
+          if (badge) { badge.textContent = String(count); badge.hidden = !(count > 0); }
+        }
+      });
+    } else {
+      await authController.setContext({ tab, origin: origin ?? '', siteContext: fieldStatus?.siteContext ?? {} });
+      if (initialDrawer === 'import') authController.openImport();
+    }
+  } else {
+    if (origin?.startsWith('https://')) await refreshTotp();
+  }
 }
 
 function startLiveTicker() {
@@ -406,7 +487,7 @@ function startLiveTicker() {
         }
       }
     }
-    if (totpSiteMatch?.status === 'found') {
+    if (totpSiteMatch?.status === 'found' || totpSiteMatch?.status === 'choose') {
       const period = totpSiteMatch.period || 30;
       const epochSec = Math.floor(Date.now() / 1000);
       const counter = Math.floor(epochSec / period);
@@ -420,6 +501,14 @@ function startLiveTicker() {
       const barEl = $('totpProgressBar');
       if (secEl) secEl.textContent = `${rem}s`;
       if (barEl) barEl.style.width = `${Math.round((rem / period) * 100)}%`;
+      for (const c of totpSiteMatch.candidates ?? []) {
+        const cPer = c.period || 30;
+        const cRem = cPer - (((epochSec % cPer) + cPer) % cPer);
+        const sEl = $('totpResult')?.querySelector(`[data-totp-sec-id="${c.id}"]`);
+        const bEl = $('totpResult')?.querySelector(`[data-totp-bar-id="${c.id}"]`);
+        if (sEl) sEl.textContent = `${cRem}s`;
+        if (bEl) bEl.style.width = `${Math.round((cRem / cPer) * 100)}%`;
+      }
     }
   }, 1000);
   liveTicker?.unref?.();
@@ -484,6 +573,22 @@ async function init() {
   startLiveTicker();
   void searchLatest(false);
 }
+
+$('modeMailBtn')?.addEventListener('click', () => { void switchMode('mail'); });
+$('modeAuthBtn')?.addEventListener('click', () => { void switchMode('auth'); });
+$('totpOpenImportBtn')?.addEventListener('click', () => { void switchMode('auth', 'import'); });
+$('totpOpenAllBtn')?.addEventListener('click', () => { void switchMode('auth'); });
+$('popoutAuthBtn')?.addEventListener('click', async () => {
+  const qs = new URLSearchParams();
+  if (tab?.id) qs.set('tabId', String(tab.id));
+  if (origin) qs.set('origin', origin);
+  const url = chrome.runtime.getURL(`src/authenticator.html${qs.toString() ? `?${qs}` : ''}`);
+  if (chrome.windows?.create) {
+    await chrome.windows.create({ url, type: 'popup', width: 396, height: 590 }).catch(() => {});
+  } else {
+    await chrome.tabs?.create?.({ url, active: true }).catch(() => {});
+  }
+});
 
 $('dualFillBtn')?.addEventListener('click', async () => {
   if (!current?.sessionId) return;
@@ -730,6 +835,7 @@ async function searchLatest(refreshField = true) {
       if (result.status === 'found') {
         showResult(result);
         chrome.tabs.sendMessage(tab.id, { ...result, type: 'CODE_FOUND', fieldId: fieldStatus?.fieldId }).catch(() => {});
+        if (result.accountEmail && totpSiteMatch?.status === 'choose') void refreshTotp();
         break;
       }
       if (result.status === 'webmail_unread') {

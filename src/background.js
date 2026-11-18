@@ -20,9 +20,14 @@ import {
   lockTotpVault,
   setTotpPassphrase,
   addTotpAccount,
+  updateTotpAccount,
   removeTotpAccount,
   getTotpForSite,
+  getTotpCandidatesForSite,
   getTotpById,
+  listAllTotpCodes,
+  importTotpPayload,
+  exportTotpVault,
   describeTotpError
 } from './totp.js';
 
@@ -312,14 +317,18 @@ async function rememberSender(item) {
   }
 }
 
-async function insertDual({ tabId, frameId = 0, origin, sessionId, siteContext = {} }) {
+async function insertDual({ tabId, frameId = 0, origin, sessionId, siteContext = {}, totpId = null }) {
   const key = sessionKey(tabId, frameId);
   const item = sessions.valid(key, origin, sessionId);
   if (!item || !item.code) return { status: 'expired', message: 'Email code expired. Search again.' };
   if (!await candidateEnabled(item)) { sessions.delete(key); return { status: 'expired', message: 'Local webmail is disabled.' }; }
   if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
   if (item.siteId !== 'generic' && !trustedOrigin(origin, item.siteId)) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
-  const totp = await getTotpForSite(origin, siteContext ?? item.siteContext ?? {});
+  const mergedCtx = { ...(siteContext ?? item.siteContext ?? {}), matchedEmailAccount: item.accountEmail ?? null };
+  const totp = totpId ? await getTotpById(totpId) : await getTotpCandidatesForSite(origin, mergedCtx);
+  if (totp.status === 'choose') {
+    return { status: 'choose_totp', candidates: totp.candidates, message: 'Выберите нужный аккаунт 2FA.' };
+  }
   if (totp.status !== 'found') {
     return { status: totp.status === 'locked' ? 'locked' : 'error', message: totp.status === 'locked' ? 'Unlock 2FA in CodeSnap popup.' : 'No matching 2FA secret found.' };
   }
@@ -457,6 +466,11 @@ async function triggerQuickFill(tab, info = null) {
   }
 
   if (status?.channel === 'authenticator') {
+    if (totp.status === 'choose') {
+      await chrome.tabs.sendMessage(tabId, { type: 'SHOW_TOTP_CHOOSER', candidates: totp.candidates }, { frameId }).catch(() => {});
+      await notifyInlineToast(tabId, frameId, `Найдено ${totp.candidates.length} 2FA-аккаунта — выберите нужную почту`);
+      return { status: 'choose', count: totp.candidates.length };
+    }
     if (totp.status === 'found') {
       const inserted = await chrome.tabs.sendMessage(tabId, { type: 'INSERT_TOTP', code: totp.code, origin }, { frameId }).catch(() => null);
       if (inserted?.status === 'inserted') {
@@ -566,17 +580,34 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       return handleWebmailPush(request, sender);
     }
     if (request.type === 'TOTP_ACTION') {
-      const isPopup = sender.url === `chrome-extension://${chrome.runtime?.id}/src/popup.html` || (!sender.tab && !sender.url);
+      const isPopup = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
       if (!isPopup) return { status: 'untrusted', message: 'Invalid page.' };
       const payload = request.payload ?? {};
       const command = payload.command;
       try {
         if (command === 'status') {
           const vaultStatus = await getTotpVaultStatus();
-          const siteMatch = payload.origin ? await getTotpForSite(payload.origin, payload.siteContext ?? {}) : { status: 'none' };
+          const tabSession = Number.isInteger(payload.tabId) ? sessions.get(sessionKey(payload.tabId, 0)) : null;
+          const mergedCtx = {
+            ...(payload.siteContext ?? {}),
+            matchedEmailAccount: payload.matchedEmailAccount || (tabSession?.status === 'found' ? tabSession.accountEmail : null)
+          };
+          const siteMatch = payload.origin ? await getTotpCandidatesForSite(payload.origin, mergedCtx) : { status: 'none', candidates: [] };
           return { status: 'ok', ...vaultStatus, siteMatch };
         }
+        if (command === 'list_all') {
+          const tabSession = Number.isInteger(payload.tabId) ? sessions.get(sessionKey(payload.tabId, 0)) : null;
+          const mergedCtx = {
+            ...(payload.siteContext ?? {}),
+            matchedEmailAccount: payload.matchedEmailAccount || (tabSession?.status === 'found' ? tabSession.accountEmail : null)
+          };
+          const list = await listAllTotpCodes(payload.origin || '', mergedCtx);
+          return { ...list, status: 'ok', vaultLocked: list.status === 'locked' };
+        }
         if (command === 'add') return { status: 'ok', ...await addTotpAccount(payload.input, payload.meta ?? {}) };
+        if (command === 'update') return await updateTotpAccount(payload.id, payload.patch ?? {});
+        if (command === 'import') return await importTotpPayload(payload.text, payload.meta ?? {});
+        if (command === 'export') return { status: 'ok', data: await exportTotpVault(payload.format || 'txt') };
         if (command === 'add_entries') {
           const list = Array.isArray(payload.entries) ? payload.entries : [];
           if (!list.length) return { status: 'error', message: 'Не найдено ни одной 2FA-записи.' };
@@ -623,17 +654,26 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     }
     if (request.type === 'GET_TOTP_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
-      return getTotpForSite(request.origin, request.siteContext ?? {});
+      const tabSession = sessions.get(sessionKey(sender.tab.id, sender.frameId ?? 0));
+      const mergedCtx = {
+        ...(request.siteContext ?? {}),
+        matchedEmailAccount: request.matchedEmailAccount || (tabSession?.status === 'found' ? tabSession.accountEmail : null),
+        preferredTotpId: request.preferredTotpId || null
+      };
+      return getTotpCandidatesForSite(request.origin, mergedCtx);
     }
     if (request.type === 'INSERT_TOTP_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
-      const totp = await getTotpForSite(request.origin, request.siteContext ?? {});
+      const totp = request.totpId
+        ? await getTotpById(request.totpId)
+        : await getTotpCandidatesForSite(request.origin, { ...(request.siteContext ?? {}), matchedEmailAccount: request.matchedEmailAccount || null });
+      if (totp.status === 'choose') return { status: 'choose', candidates: totp.candidates };
       if (totp.status !== 'found') return { status: totp.status === 'locked' ? 'locked' : 'expired', message: '2FA code unavailable.' };
       return chrome.tabs.sendMessage(sender.tab.id, { type: 'INSERT_TOTP', code: totp.code, origin: request.origin }, { frameId: sender.frameId ?? 0 });
     }
     if (request.type === 'INSERT_DUAL_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
-      return insertDual({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: request.origin, sessionId: request.sessionId, siteContext: request.siteContext ?? {} });
+      return insertDual({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: request.origin, sessionId: request.sessionId, siteContext: request.siteContext ?? {}, totpId: request.totpId ?? null });
     }
     if (request.type === 'INSERT_DUAL_POPUP' && !sender.tab) {
       return insertDual(request);

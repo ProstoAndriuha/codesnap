@@ -180,5 +180,25 @@ try {
   const totpAddedText = await qrPopup.locator('#totpStatus').textContent();
   if (!/2FAS/.test(totpAddedText || '')) throw new Error(`SVG QR 2FA scan did not report 2FAS success: ${totpAddedText}`);
 
-  console.log('Chrome smoke: Bitbase-style email found through recent-mail fallback and inserted only into its email field; hidden-tab-URL insertion, SVG QR 2FA scanning and popup actions all worked.');
+  await qrPopup.locator('#modeAuthBtn').click();
+  await qrPopup.locator('#authModeView .auth-tile.current-site').waitFor({ timeout: 5000 });
+  const authIssuer = await qrPopup.locator('#authModeView .auth-tile.current-site .auth-tile-issuer').textContent();
+  const authCode = await qrPopup.locator('#authModeView .auth-tile.current-site .auth-tile-code').textContent();
+  const authPieVisible = await qrPopup.locator('#authModeView .auth-tile.current-site svg.auth-pie').isVisible();
+  if (!/2FAS/.test(authIssuer || '')) throw new Error(`Authenticator tile issuer did not include 2FAS: ${authIssuer}`);
+  if (!/^\d{3}\s\d{3}$/.test((authCode || '').trim())) throw new Error(`Unexpected Authenticator code format: ${authCode}`);
+  if (!authPieVisible) throw new Error('Expected Authenticator SVG pie countdown timer to be visible');
+
+  await qrPopup.locator('#authModeView .auth-search').fill('no-such-account-xyz');
+  await qrPopup.locator('#authModeView .auth-empty').waitFor({ timeout: 5000 });
+  await qrPopup.locator('#authModeView .auth-search').fill('');
+  await qrPopup.locator('#authModeView .auth-tile').waitFor({ timeout: 5000 });
+
+  const authWin = await context.newPage();
+  await authWin.goto(`chrome-extension://${extensionId}/src/authenticator.html?origin=${encodeURIComponent('https://2fas.com')}`);
+  await authWin.locator('#standaloneAuthRoot .auth-tile.current-site').waitFor({ timeout: 5000 });
+  const winPieVisible = await authWin.locator('#standaloneAuthRoot .auth-tile.current-site svg.auth-pie').isVisible();
+  if (!winPieVisible) throw new Error('Expected standalone Authenticator window SVG pie timer to be visible');
+
+  console.log('Chrome smoke: Bitbase-style email found through recent-mail fallback and inserted only into its email field; hidden-tab-URL insertion, SVG QR 2FA scanning, Authenticator view/pop-out window and popup actions all worked.');
 } finally { await context.close(); }

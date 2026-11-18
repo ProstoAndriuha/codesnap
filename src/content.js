@@ -37,6 +37,10 @@
   let panelTimer = null;
   let toastEl = null;
   let toastTimer = null;
+  let selectedTotpId = null;
+  let lastTypedEmail = null;
+  let lastTypedEmailAt = 0;
+  let lastTypedIdentifier = null;
   const t = (key, fallback) => chrome.i18n?.getMessage(key) || fallback;
   const observedRoots = new WeakSet();
 
@@ -199,8 +203,12 @@
     if (field?.channel === 'authenticator') {
       if (totpDetails?.status === 'found') {
         const rem = totpDetails.remainingSeconds ?? 30;
+        const acct = totpDetails.accountEmail || totpDetails.account || totpDetails.issuer;
         chip.textContent = `${totpDetails.code} · ${rem}s`;
-        chip.title = `2FA (${totpDetails.issuer}) · ${rem}s · Click once to insert`;
+        chip.title = `2FA (${acct}) · ${rem}s · Click once to insert`;
+      } else if (totpDetails?.status === 'choose') {
+        chip.textContent = `🔐 2FA (${totpDetails.candidates?.length ?? 2})`;
+        chip.title = 'Найдено несколько 2FA-аккаунтов — нажмите для выбора нужной почты';
       } else if (totpDetails?.status === 'locked') {
         chip.textContent = '🔒 2FA';
         chip.title = 'Unlock 2FA in CodeSnap popup';
@@ -210,6 +218,9 @@
     if (code && totpDetails?.status === 'found' && detector.detect2FA?.(document) && siteHasTotpHint()) {
       chip.textContent = `${code} + 2FA`;
       chip.title = `Click once to insert Email + 2FA (${totpDetails.remainingSeconds}s)`;
+    } else if (code && totpDetails?.status === 'choose' && detector.detect2FA?.(document) && siteHasTotpHint()) {
+      chip.textContent = `${code} · 2FA?`;
+      chip.title = 'Нажмите, чтобы выбрать 2FA-аккаунт (несколько аккаунтов для сайта)';
     } else if (code) {
       chip.textContent = code;
       const remSec = codeDetails?.timestamp
@@ -250,23 +261,37 @@
 
   function startTotpTimer(expectedFieldId) {
     stopTotpTimer();
-    if (!totpDetails || totpDetails.status !== 'found') return;
+    if (!totpDetails || (totpDetails.status !== 'found' && totpDetails.status !== 'choose')) return;
     totpTimer = safeInterval(() => {
-      if (fieldId !== expectedFieldId || !totpDetails || totpDetails.status !== 'found' || reloadRequired) {
+      if (fieldId !== expectedFieldId || !totpDetails || (totpDetails.status !== 'found' && totpDetails.status !== 'choose') || reloadRequired) {
         stopTotpTimer();
         return;
       }
       const period = totpDetails.period || 30;
       const epochSec = Math.floor(Date.now() / 1000);
       const counter = Math.floor(epochSec / period);
-      if (counter !== totpDetails.counter) {
+      if (totpDetails.counter && counter !== totpDetails.counter) {
         void refreshInlineTotp(expectedFieldId);
         return;
       }
-      totpDetails.remainingSeconds = period - (((epochSec % period) + period) % period);
+      const rem = period - (((epochSec % period) + period) % period);
+      totpDetails.remainingSeconds = rem;
       updateChipDisplay();
       const liveEl = panel?.shadowRoot?.querySelector?.('.totp-live');
-      if (liveEl) liveEl.textContent = `${totpDetails.code.replace(/^(.{3})(.{3})$/, '$1 $2')} · ${totpDetails.remainingSeconds}s`;
+      if (liveEl && totpDetails.code) {
+        liveEl.textContent = `${totpDetails.code.replace(/^(.{3})(.{3})$/, '$1 $2')} · ${rem}s`;
+      }
+      if (totpDetails.status === 'choose' && panel?.shadowRoot) {
+        for (const el of panel.shadowRoot.querySelectorAll('.totp-cand-live')) {
+          const cid = el.getAttribute('data-cand-id');
+          const c = totpDetails.candidates?.find(x => x.id === cid);
+          if (c) {
+            const cPer = c.period || 30;
+            const cRem = cPer - (((epochSec % cPer) + cPer) % cPer);
+            el.textContent = `${c.code.replace(/^(.{3})(.{3})$/, '$1 $2')} · ${cRem}s`;
+          }
+        }
+      }
     }, 1000);
   }
 
@@ -274,9 +299,15 @@
     if (!expectedFieldId || totpFetching || reloadRequired || isOriginMuted() || !siteHasTotpHint()) return;
     totpFetching = true;
     try {
-      const res = await chrome.runtime.sendMessage({ type: 'GET_TOTP_INLINE', origin: location.origin, siteContext: context() });
+      const res = await chrome.runtime.sendMessage({
+        type: 'GET_TOTP_INLINE',
+        origin: location.origin,
+        siteContext: context(),
+        matchedEmailAccount: codeDetails?.accountEmail ?? null,
+        preferredTotpId: selectedTotpId
+      });
       if (!document.defaultView || fieldId !== expectedFieldId) return;
-      if (res?.status === 'found') {
+      if (res?.status === 'found' || res?.status === 'choose') {
         totpDetails = { ...res };
         updateChipDisplay();
         startTotpTimer(expectedFieldId);
@@ -301,23 +332,39 @@
     }
   }
 
-  async function insertTotpInline(expectedFieldId) {
+  async function insertTotpInline(expectedFieldId, totpId = null) {
     if (fieldId !== expectedFieldId || reloadRequired) return;
+    if (totpId) selectedTotpId = totpId;
     try {
-      const res = await chrome.runtime.sendMessage({ type: 'INSERT_TOTP_INLINE', origin: location.origin, siteContext: context() });
+      const res = await chrome.runtime.sendMessage({
+        type: 'INSERT_TOTP_INLINE',
+        origin: location.origin,
+        siteContext: context(),
+        matchedEmailAccount: codeDetails?.accountEmail ?? null,
+        totpId
+      });
       if (fieldId !== expectedFieldId) return;
+      if (res?.status === 'choose' && res.candidates?.length) {
+        totpDetails = { ...res };
+        updateChipDisplay();
+        showCodePanel();
+        return;
+      }
       if (res?.status === 'inserted') {
         completedFieldId = fieldId;
         stopTotpTimer();
         closePanel();
         if (chip) { chip.textContent = '✓'; chip.title = '2FA code inserted'; }
-      } else if (totpDetails?.code) {
-        try {
-          await navigator.clipboard.writeText(totpDetails.code);
-          chrome.runtime.sendMessage({ type: 'CLIPBOARD_COPIED' }).catch(() => {});
-          if (chip) { chip.textContent = 'Copied'; chip.title = '2FA code copied.'; }
-        } catch {
-          if (chip) { chip.textContent = 'Retry'; chip.title = res?.message ?? 'Could not insert 2FA code'; }
+      } else if (totpDetails?.code || totpId) {
+        const chosenCode = totpId ? totpDetails?.candidates?.find(c => c.id === totpId)?.code : totpDetails?.code;
+        if (chosenCode) {
+          try {
+            await navigator.clipboard.writeText(chosenCode);
+            chrome.runtime.sendMessage({ type: 'CLIPBOARD_COPIED' }).catch(() => {});
+            if (chip) { chip.textContent = 'Copied'; chip.title = '2FA code copied.'; }
+          } catch {
+            if (chip) { chip.textContent = 'Retry'; chip.title = res?.message ?? 'Could not insert 2FA code'; }
+          }
         }
       }
     } catch (error) {
@@ -325,16 +372,24 @@
     }
   }
 
-  async function insertDualInline(expectedFieldId) {
+  async function insertDualInline(expectedFieldId, totpId = null) {
     if (fieldId !== expectedFieldId || reloadRequired || !sessionId) return;
+    if (totpId) selectedTotpId = totpId;
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'INSERT_DUAL_INLINE',
         origin: location.origin,
         sessionId,
-        siteContext: context()
+        siteContext: context(),
+        totpId
       });
       if (fieldId !== expectedFieldId) return;
+      if (res?.status === 'choose_totp' && res.candidates?.length) {
+        totpDetails = { status: 'choose', count: res.candidates.length, candidates: res.candidates, period: res.candidates[0]?.period ?? 30, counter: res.candidates[0]?.counter };
+        updateChipDisplay();
+        showCodePanel();
+        return;
+      }
       if (res?.status === 'inserted_dual') {
         completedFieldId = fieldId;
         code = null; link = null; sessionId = null; review = null; choices = null; codeDetails = null;
@@ -437,10 +492,11 @@
 
   function showCodePanel() {
     const items = choices?.candidates?.map(item => ({ ...item, sessionId: choices.sessionId })) ?? (review ? [review] : codeDetails ? [codeDetails] : []);
-    const hasTotp = totpDetails?.status === 'found' && siteHasTotpHint();
+    const hasTotp = (totpDetails?.status === 'found' || totpDetails?.status === 'choose') && siteHasTotpHint();
     if ((!items.length && !hasTotp) || !fieldId) return;
     const expectedFieldId = fieldId;
-    showPanel('CodeSnap', choices ? t('inlineChoose', 'Choose the email you requested') : '');
+    const headerNote = choices ? t('inlineChoose', 'Choose the email you requested') : totpDetails?.status === 'choose' ? 'Выберите нужный 2FA-аккаунт' : '';
+    showPanel('CodeSnap', headerNote);
     panel.dataset.kind = 'codes';
     panel.style.width = '328px';
     const root = panel.shadowRoot;
@@ -453,16 +509,16 @@
     label.prepend(mark);
     const dark = isDarkTheme();
     const style = document.createElement('style');
-    style.textContent = `.code-row{display:flex;align-items:center;gap:10px;margin:12px -13px 0;padding:13px;border-top:1px solid ${dark ? '#334066' : '#e5eaf4'};border-left:3px solid transparent}.code-row:first-of-type{border-left-color:#7387f4}.code-info{flex:1;min-width:0}.digits{font:800 23px/1.25 system-ui;letter-spacing:1.5px;font-variant-numeric:tabular-nums;color:${dark ? '#f2f4ff' : '#263752'}}.link-title{font:700 13px/1.35 system-ui;color:${dark ? '#f2f4ff' : '#263752'};overflow-wrap:anywhere}.latest{display:inline-block;margin-left:7px;color:${dark ? '#a6b3ff' : '#5369e8'};font:800 9px system-ui;letter-spacing:.7px;vertical-align:middle}.timer-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:${dark ? '#233052' : '#edf1ff'};color:${dark ? '#b6c3ef' : '#4056c5'};font:700 10px system-ui;font-variant-numeric:tabular-nums}.timer-badge.expired{background:${dark ? '#49252d' : '#ffecef'};color:${dark ? '#ff9eaa' : '#b42336'}}.meta{margin-top:4px;color:${dark ? '#a5b4d4' : '#738096'};font-size:11px;overflow-wrap:anywhere}.row-actions{display:flex;flex-direction:column;gap:5px;flex:none}.fill{flex:none;padding:8px 12px;border:1px solid ${dark ? '#52629b' : '#c8d1f4'};border-radius:8px;background:${dark ? '#263354' : '#edf1ff'};color:${dark ? '#e8ebff' : '#4056c5'};font:700 12px system-ui;cursor:pointer}.fill:disabled{opacity:.5;cursor:wait}.fill:focus-visible{outline:2px solid #7387f4;outline-offset:2px}.link-mini{padding:5px 8px;border:1px solid ${dark ? '#43517d' : '#d6def8'};border-radius:7px;background:transparent;color:${dark ? '#b6c3ef' : '#4a5ec9'};font:650 11px system-ui;cursor:pointer}.warning{color:${dark ? '#ffc978' : '#8b5418'};font-size:11px;margin-top:6px}.totp-box{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 0;padding:10px 11px;border:1px solid ${dark ? '#3a4b7d' : '#d4ddfb'};border-radius:10px;background:${dark ? '#1c2542' : '#f4f7ff'}}.totp-live{font:800 18px/1.2 system-ui;letter-spacing:1.2px;font-variant-numeric:tabular-nums}.dual-cta{display:block;width:100%;margin-top:10px;padding:9px 11px;border:0;border-radius:9px;background:linear-gradient(135deg,#5b6ef5,#6d55e8);color:#fff;font:700 12px system-ui;cursor:pointer}`;
+    style.textContent = `.code-row{display:flex;align-items:center;gap:10px;margin:12px -13px 0;padding:13px;border-top:1px solid ${dark ? '#334066' : '#e5eaf4'};border-left:3px solid transparent}.code-row:first-of-type{border-left-color:#7387f4}.code-info{flex:1;min-width:0}.digits{font:800 23px/1.25 system-ui;letter-spacing:1.5px;font-variant-numeric:tabular-nums;color:${dark ? '#f2f4ff' : '#263752'}}.link-title{font:700 13px/1.35 system-ui;color:${dark ? '#f2f4ff' : '#263752'};overflow-wrap:anywhere}.latest{display:inline-block;margin-left:7px;color:${dark ? '#a6b3ff' : '#5369e8'};font:800 9px system-ui;letter-spacing:.7px;vertical-align:middle}.timer-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:${dark ? '#233052' : '#edf1ff'};color:${dark ? '#b6c3ef' : '#4056c5'};font:700 10px system-ui;font-variant-numeric:tabular-nums}.timer-badge.expired{background:${dark ? '#49252d' : '#ffecef'};color:${dark ? '#ff9eaa' : '#b42336'}}.meta{margin-top:4px;color:${dark ? '#a5b4d4' : '#738096'};font-size:11px;overflow-wrap:anywhere}.row-actions{display:flex;flex-direction:column;gap:5px;flex:none}.fill{flex:none;padding:8px 12px;border:1px solid ${dark ? '#52629b' : '#c8d1f4'};border-radius:8px;background:${dark ? '#263354' : '#edf1ff'};color:${dark ? '#e8ebff' : '#4056c5'};font:700 12px system-ui;cursor:pointer}.fill:disabled{opacity:.5;cursor:wait}.fill:focus-visible{outline:2px solid #7387f4;outline-offset:2px}.link-mini{padding:5px 8px;border:1px solid ${dark ? '#43517d' : '#d6def8'};border-radius:7px;background:transparent;color:${dark ? '#b6c3ef' : '#4a5ec9'};font:650 11px system-ui;cursor:pointer}.warning{color:${dark ? '#ffc978' : '#8b5418'};font-size:11px;margin-top:6px}.totp-box{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 0;padding:10px 11px;border:1px solid ${dark ? '#3a4b7d' : '#d4ddfb'};border-radius:10px;background:${dark ? '#1c2542' : '#f4f7ff'}}.totp-live,.totp-cand-live{font:800 18px/1.2 system-ui;letter-spacing:1.2px;font-variant-numeric:tabular-nums}.dual-cta{display:block;width:100%;margin-top:10px;padding:9px 11px;border:0;border-radius:9px;background:linear-gradient(135deg,#5b6ef5,#6d55e8);color:#fff;font:700 12px system-ui;cursor:pointer}`;
     root.append(style);
 
-    if (hasTotp) {
+    if (hasTotp && totpDetails.status === 'found') {
       if (code && sessionId && detector.detect2FA?.(document)) {
         const dualBtn = document.createElement('button');
         dualBtn.type = 'button';
         dualBtn.className = 'dual-cta';
         dualBtn.textContent = t('dualFillAction', '⚡ Insert both codes (Email + 2FA)');
-        dualBtn.addEventListener('click', event => { if (event.isTrusted) void insertDualInline(expectedFieldId); });
+        dualBtn.addEventListener('click', event => { if (event.isTrusted) void insertDualInline(expectedFieldId, totpDetails.id); });
         box.append(dualBtn);
       }
       const totpBox = document.createElement('div');
@@ -479,9 +535,50 @@
       tBtn.type = 'button';
       tBtn.className = 'fill';
       tBtn.textContent = t('inlineFill', 'Fill');
-      tBtn.addEventListener('click', event => { if (event.isTrusted) void insertTotpInline(expectedFieldId); });
+      tBtn.addEventListener('click', event => { if (event.isTrusted) void insertTotpInline(expectedFieldId, totpDetails.id); });
       totpBox.append(tInfo, tBtn);
       box.append(totpBox);
+    } else if (hasTotp && totpDetails.status === 'choose') {
+      const hasDual = Boolean(code && sessionId && detector.detect2FA?.(document));
+      for (const cand of (totpDetails.candidates ?? []).slice(0, 8)) {
+        const totpBox = document.createElement('div');
+        totpBox.className = 'totp-box';
+        const tInfo = document.createElement('div');
+        tInfo.className = 'code-info';
+        const tDigits = document.createElement('div');
+        tDigits.className = 'totp-cand-live';
+        tDigits.setAttribute('data-cand-id', cand.id);
+        tDigits.textContent = `${cand.code.replace(/^(.{3})(.{3})$/, '$1 $2')} · ${cand.remainingSeconds}s`;
+        const tMeta = document.createElement('div');
+        tMeta.className = 'meta';
+        tMeta.append(document.createTextNode(`${cand.issuer} · `));
+        const who = document.createElement('strong');
+        who.textContent = cand.accountEmail || cand.account || '2FA';
+        tMeta.append(who);
+        tInfo.append(tDigits, tMeta);
+        const tActions = document.createElement('div');
+        tActions.className = 'row-actions';
+        const tBtn = document.createElement('button');
+        tBtn.type = 'button';
+        tBtn.className = 'fill totp-pick-btn';
+        tBtn.textContent = hasDual ? '⚡ Оба' : t('inlineFill', 'Fill');
+        tBtn.addEventListener('click', event => {
+          if (!event.isTrusted) return;
+          if (hasDual) void insertDualInline(expectedFieldId, cand.id);
+          else void insertTotpInline(expectedFieldId, cand.id);
+        });
+        tActions.append(tBtn);
+        if (hasDual) {
+          const only2fa = document.createElement('button');
+          only2fa.type = 'button';
+          only2fa.className = 'link-mini';
+          only2fa.textContent = 'Только 2FA';
+          only2fa.addEventListener('click', event => { if (event.isTrusted) void insertTotpInline(expectedFieldId, cand.id); });
+          tActions.append(only2fa);
+        }
+        totpBox.append(tInfo, tActions);
+        box.append(totpBox);
+      }
     }
 
     const newest = items.length ? Math.max(...items.map(item => item.timestamp || 0)) : 0;
@@ -617,6 +714,9 @@
         if (result.status === 'found') {
           code = result.code ?? null; link = result.link ?? null; sessionId = result.sessionId;
           codeDetails = result; choices = null; webmailHint = null;
+          if (totpDetails?.status === 'choose' && codeDetails.accountEmail && detector.detect2FA?.(document) && siteHasTotpHint()) {
+            void refreshInlineTotp(expectedFieldId);
+          }
           updateChipDisplay();
           startChipExpiryTimer();
           if (detailedPopup) showCodePanel();
@@ -667,10 +767,40 @@
     return a?.type === b?.type && a?.channel === b?.channel && a?.inputs.length === b?.inputs.length && a?.inputs.every((input, i) => input === b.inputs[i]) && (a?.type !== 'link-prompt' || a?.anchor === b?.anchor);
   }
 
+  function readPageAccountSignals() {
+    let storedEmail = lastTypedEmail && Date.now() - lastTypedEmailAt < 10 * 60_000 ? lastTypedEmail : null;
+    if (!storedEmail) {
+      try {
+        const raw = sessionStorage.getItem('__cs_login_email');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.email && Date.now() - Number(parsed.ts) < 10 * 60_000) storedEmail = parsed.email;
+        }
+      } catch { /* sessionStorage unavailable */ }
+    }
+    const foundEmails = new Set();
+    for (const el of document.querySelectorAll?.('input[type="email"], input[name*="email" i], input[autocomplete="username"]') ?? []) {
+      const m = /\b([a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\b/i.exec(el.value ?? '');
+      if (m) foundEmails.add(m[1].toLowerCase());
+    }
+    const visibleText = (document.body?.innerText ?? document.body?.textContent ?? '').slice(0, 2500);
+    for (const m of visibleText.matchAll(/\b([a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\b/gi)) {
+      const em = m[1].toLowerCase();
+      if (!/^(?:noreply|no-reply|support|help|admin|security)@/.test(em)) foundEmails.add(em);
+      if (foundEmails.size >= 5) break;
+    }
+    return {
+      lastTypedEmail: storedEmail,
+      lastTypedIdentifier,
+      pageEmails: [...foundEmails]
+    };
+  }
+
   function context() {
     const meta = document.querySelector('meta[property="og:site_name"],meta[name="application-name"]');
     const bodySnippet = `${field?.context ?? ''} ${document.body?.textContent?.slice(0, 1200) ?? ''}`;
     const maskedMatch = /\b[a-z0-9][a-z0-9._-]{0,12}[*•·]{1,10}[a-z0-9._-]{0,12}@[a-z0-9*•·.-]+\.[a-z]{2,}\b/i.exec(bodySnippet);
+    const signals = readPageAccountSignals();
     return {
       hostname: location.hostname,
       title: String(document.title ?? '').slice(0, 120),
@@ -679,7 +809,11 @@
       expectedLength: field?.expectedLength ?? null,
       hasCodeField: Boolean(field && field.type !== 'link-prompt'),
       prefer: field?.type === 'link-prompt' ? 'link' : 'code',
-      maskedEmail: maskedMatch?.[0] ?? null
+      maskedEmail: maskedMatch?.[0] ?? null,
+      lastTypedEmail: signals.lastTypedEmail,
+      lastTypedIdentifier: signals.lastTypedIdentifier,
+      pageEmails: signals.pageEmails,
+      matchedEmailAccount: codeDetails?.accountEmail ?? null
     };
   }
 
@@ -743,7 +877,7 @@
     if (!sameField(field, found)) {
       watchGeneration++; searching = false;
       stopTotpTimer(); stopChipExpiryTimer();
-      closePanel(); review = null; notice = null; codeDetails = null; choices = null; totpDetails = null;
+      closePanel(); review = null; notice = null; codeDetails = null; choices = null; totpDetails = null; selectedTotpId = null;
       field = found;
       fieldId = crypto.randomUUID();
       detectedAt = requestedAt && Date.now() - requestedAt < 300_000 ? requestedAt : Date.now();
@@ -769,10 +903,11 @@
         event.preventDefault(); event.stopPropagation();
         if (reloadRequired) { location.reload(); return; }
         const currentFieldId = fieldId;
-        if (choices || (detailedPopup && (codeDetails || review || totpDetails?.status === 'found'))) { showCodePanel(); return; }
+        if (choices || (detailedPopup && (codeDetails || review || totpDetails?.status === 'found' || totpDetails?.status === 'choose'))) { showCodePanel(); return; }
         if (review) { showReview(); return; }
         if (field?.channel === 'authenticator') {
-          if (totpDetails?.status === 'found') { await insertTotpInline(currentFieldId); return; }
+          if (totpDetails?.status === 'choose') { showCodePanel(); return; }
+          if (totpDetails?.status === 'found') { await insertTotpInline(currentFieldId, totpDetails.id); return; }
           if (totpDetails?.status === 'locked') {
             showPanel('CodeSnap 2FA', 'Хранилище 2FA заблокировано. Нажмите на иконку CodeSnap в панели браузера и введите PIN.');
             return;
@@ -780,9 +915,9 @@
           await refreshInlineTotp(currentFieldId);
           return;
         }
-        if (code && sessionId && totpDetails?.status === 'found' && detector.detect2FA?.(document) && siteHasTotpHint()) {
-          await insertDualInline(currentFieldId);
-          return;
+        if (code && sessionId && detector.detect2FA?.(document) && siteHasTotpHint()) {
+          if (totpDetails?.status === 'choose') { showCodePanel(); return; }
+          if (totpDetails?.status === 'found') { await insertDualInline(currentFieldId, totpDetails.id); return; }
         }
         if (webmailHint && !code && !link) {
           const hint = webmailHint;
@@ -1006,11 +1141,29 @@
         if (chip) { chip.textContent = 'Review'; chip.title = `From ${request.from ?? 'another sender'}. Click to check it.`; }
       } else {
         code = request.code ?? null; link = request.link ?? null; sessionId = request.sessionId; review = null;
+        if (totpDetails?.status === 'choose' && codeDetails.accountEmail && detector.detect2FA?.(document) && siteHasTotpHint()) {
+          void refreshInlineTotp(fieldId);
+        }
         updateChipDisplay();
       }
       startChipExpiryTimer();
       position();
       if (detailedPopup) showCodePanel();
+      respond?.({ status: 'ok' });
+      return;
+    }
+    if (request.type === 'SHOW_TOTP_CHOOSER' && Array.isArray(request.candidates) && request.candidates.length) {
+      totpDetails = {
+        status: 'choose',
+        count: request.candidates.length,
+        candidates: request.candidates,
+        period: request.candidates[0]?.period ?? 30,
+        remainingSeconds: request.candidates[0]?.remainingSeconds ?? 30,
+        counter: request.candidates[0]?.counter
+      };
+      updateChipDisplay();
+      startTotpTimer(fieldId);
+      showCodePanel();
       respond?.({ status: 'ok' });
       return;
     }
@@ -1164,14 +1317,29 @@
     if (chip) { chip.textContent = '⚡'; chip.title = 'Click to find code'; }
     clearTimeout(debounceTimer); debounceTimer = setTimeout(paint, 80);
   }, true);
+  const captureLoginEmail = event => {
+    const el = event.target;
+    if (!el || el.tagName !== 'INPUT' || el.type === 'password' || field?.inputs?.includes(el)) return;
+    const rawVal = String(el.value ?? '').trim();
+    const em = /\b([a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\b/i.exec(rawVal);
+    if (em) {
+      lastTypedEmail = em[1].toLowerCase();
+      lastTypedEmailAt = Date.now();
+      try { sessionStorage.setItem('__cs_login_email', JSON.stringify({ email: lastTypedEmail, ts: lastTypedEmailAt })); } catch { /* ignore */ }
+    } else if (/^(?:username|text|email)$/i.test(el.type || 'text') && /(?:user|login|account|nick)/i.test(`${el.name ?? ''} ${el.id ?? ''} ${el.autocomplete ?? ''}`) && rawVal.length >= 3 && rawVal.length <= 50) {
+      lastTypedIdentifier = rawVal.toLowerCase();
+    }
+  };
   document.addEventListener('input', event => {
     if (reloadRequired) return;
+    captureLoginEmail(event);
     if (field?.inputs.includes(event.target) && !event.target.value) {
       stopChipExpiryTimer();
       code = null; link = null; webmailHint = null; sessionId = null; review = null; completedFieldId = null; codeDetails = null; choices = null; closePanel();
       if (chip && chip.textContent !== '⚡' && chip.textContent !== 'Finding…' && field?.channel !== 'authenticator') { chip.textContent = '⚡'; chip.title = 'Click to find code'; }
     }
   }, true);
+  document.addEventListener('change', captureLoginEmail, true);
   addEventListener('scroll', position, { passive: true });
   addEventListener('resize', position);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') closePanel(); });

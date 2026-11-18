@@ -1,7 +1,22 @@
-import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity } from './core.js';
+import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity, matchesMaskedEmail } from './core.js';
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const PBKDF2_ITERATIONS = 150_000;
+
+export function extractAccountEmail(rawAccount, rawIssuer = '') {
+  const sources = [rawAccount, rawIssuer];
+  for (const source of sources) {
+    const text = String(source ?? '').trim();
+    if (!text || !text.includes('@')) continue;
+    const parts = text.split(/(?:--|[:/|()\s,;])+/).filter(Boolean);
+    for (const part of parts) {
+      const stripped = part.replace(/^[a-z0-9.-]+\.(?:com|net|org|io|ru|me|co|exchange)-+/i, '');
+      const match = /([a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})(?=$|[^a-z])/i.exec(stripped);
+      if (match) return match[1].toLowerCase();
+    }
+  }
+  return null;
+}
 
 function toBase64(bytes) {
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -242,7 +257,10 @@ export function parseTotpInput(rawInput, fallback = {}) {
     }
 
     const secret = normalizeBase32(parsed.searchParams.get('secret') ?? '');
-    const issuer = (parsed.searchParams.get('issuer') || issuerFromLabel || fallback.issuer || fallback.domain || 'Account').trim().slice(0, 60);
+    const accountPrefixDomain = !parsed.searchParams.get('issuer') && !issuerFromLabel && accountFromLabel.includes('--')
+      ? accountFromLabel.split('--')[0].trim()
+      : '';
+    const issuer = (parsed.searchParams.get('issuer') || issuerFromLabel || accountPrefixDomain || fallback.issuer || fallback.domain || 'Account').trim().slice(0, 60);
     const account = (accountFromLabel || fallback.account || '').trim().slice(0, 80);
 
     const rawAlgo = String(parsed.searchParams.get('algorithm') || fallback.algorithm || 'SHA1').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -344,6 +362,7 @@ async function decryptEntries(vault, aesKey) {
 function buildHint(entry) {
   const normIssuer = String(entry.issuer ?? '').toLowerCase();
   const normDomain = String(entry.domain ?? '').toLowerCase();
+  const accountEmail = extractAccountEmail(entry.account, entry.issuer);
   const matchingEcos = ECOSYSTEMS.filter(eco =>
     eco.siteDomains.some(d => normDomain === d || normDomain.endsWith(`.${d}`) || (d.split('.')[0].length >= 4 && normIssuer.includes(d.split('.')[0]))) ||
     eco.aliases.some(a => normIssuer === a || (a.length >= 3 && normIssuer.includes(a)))
@@ -361,6 +380,7 @@ function buildHint(entry) {
     id: entry.id,
     issuer: entry.issuer,
     account: entry.account ?? '',
+    accountEmail,
     domain: entry.domain ?? '',
     digits: entry.digits ?? 6,
     period: entry.period ?? 30,
@@ -522,42 +542,81 @@ export async function removeTotpAccount(id) {
   return { ok: true, count: nextEntries.length };
 }
 
-export function matchTotpHintForSite(hints, origin, siteContext = {}) {
-  if (!Array.isArray(hints) || !hints.length || !origin?.startsWith('https://')) return null;
-  const identity = siteIdentity(origin, siteContext);
-  if (!identity.hostname) return null;
+export async function updateTotpAccount(id, patch = {}) {
+  const { vault, entries } = await readVaultAndKey();
+  const idx = entries.findIndex(item => item.id === id);
+  if (idx < 0) throw new Error('TOTP_NOT_FOUND');
+  const prev = entries[idx];
+  const nextIssuer = patch.issuer !== undefined ? String(patch.issuer).trim().slice(0, 60) || prev.issuer : prev.issuer;
+  const nextAccount = patch.account !== undefined ? String(patch.account).trim().slice(0, 80) : prev.account;
+  const nextDomain = patch.domain !== undefined
+    ? (String(patch.domain).trim() ? rootDomainOf(patch.domain) : '')
+    : (patch.issuer !== undefined ? inferDomainFromIssuer(nextIssuer, prev.domain) : prev.domain);
+  const updated = { ...prev, issuer: nextIssuer, account: nextAccount, domain: nextDomain };
+  const nextEntries = entries.map((item, i) => i === idx ? updated : item);
+  const hints = await saveVaultEntries(nextEntries, vault);
+  return { ok: true, account: hints.find(h => h.id === id) };
+}
 
-  let best = null;
-  let bestScore = 0;
+export function matchAllTotpHintsForSite(hints, origin, siteContext = {}) {
+  if (!Array.isArray(hints) || !hints.length || !origin?.startsWith('https://')) return [];
+  const identity = siteIdentity(origin, siteContext);
+  if (!identity.hostname) return [];
+
+  const matches = [];
   for (const hint of hints) {
-    let score = 0;
+    let siteScore = 0;
     const hintDom = String(hint.domain ?? '').toLowerCase();
     if (hintDom && (identity.hostname === hintDom || identity.hostname.endsWith(`.${hintDom}`) || (identity.siteDomain && identity.siteDomain === rootDomainOf(hintDom)))) {
-      score += 10;
+      siteScore += 10;
     }
     if (Array.isArray(hint.matchDomains) && hint.matchDomains.some(d => identity.hostname === d || identity.hostname.endsWith(`.${d}`) || (identity.siteDomain && identity.siteDomain === d))) {
-      score += 8;
+      siteScore += 8;
     }
     const hintIssuer = String(hint.issuer ?? '').toLowerCase();
     const names = Array.isArray(hint.matchNames) ? hint.matchNames : [];
     if ((hintIssuer && (hintIssuer === identity.hostName || identity.names.includes(hintIssuer))) ||
         names.some(n => n.length >= 3 && (n === identity.hostName || identity.names.includes(n)))) {
-      score += 6;
+      siteScore += 6;
     }
-    if (score >= 6 && score > bestScore) {
-      bestScore = score;
-      best = hint;
-    }
+    if (siteScore >= 6) matches.push({ hint, siteScore });
   }
-  return best;
+  matches.sort((a, b) => b.siteScore - a.siteScore);
+  return matches;
 }
 
-export async function getTotpForSite(origin, siteContext = {}, now = Date.now()) {
+export function matchTotpHintForSite(hints, origin, siteContext = {}) {
+  return matchAllTotpHintsForSite(hints, origin, siteContext)[0]?.hint ?? null;
+}
+
+function scoreCandidateAccountMatch(entry, hint, siteContext = {}) {
+  const acctEmail = hint?.accountEmail || extractAccountEmail(entry.account, entry.issuer);
+  const matchedMailbox = extractAccountEmail(siteContext.matchedEmailAccount);
+  const typedEmail = extractAccountEmail(siteContext.lastTypedEmail);
+  const pageEmailSet = new Set((Array.isArray(siteContext.pageEmails) ? siteContext.pageEmails : []).map(e => extractAccountEmail(e)).filter(Boolean));
+
+  let accountMatchScore = 0;
+  if (siteContext.preferredTotpId && entry.id === siteContext.preferredTotpId) accountMatchScore += 40;
+  if (acctEmail && matchedMailbox && acctEmail === matchedMailbox) accountMatchScore += 25;
+  if (acctEmail && typedEmail && acctEmail === typedEmail) accountMatchScore += 20;
+  if (acctEmail && !matchedMailbox && !typedEmail && pageEmailSet.has(acctEmail)) accountMatchScore += 15;
+  if (acctEmail && !matchedMailbox && !typedEmail && siteContext.maskedEmail && matchesMaskedEmail(acctEmail, siteContext.maskedEmail)) {
+    accountMatchScore += 10;
+  }
+  if (!acctEmail && siteContext.lastTypedIdentifier) {
+    const needle = String(siteContext.lastTypedIdentifier).trim().toLowerCase();
+    if (needle.length >= 3 && String(entry.account ?? '').toLowerCase().includes(needle)) {
+      accountMatchScore += 8;
+    }
+  }
+  return accountMatchScore;
+}
+
+export async function getTotpCandidatesForSite(origin, siteContext = {}, now = Date.now()) {
   const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
   const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
-  const matched = matchTotpHintForSite(hints, origin, siteContext);
-  if (!matched) return { status: 'none' };
-  if (!totpVault) return { status: 'none' };
+  const matched = matchAllTotpHintsForSite(hints, origin, siteContext);
+  if (!matched.length || !totpVault) return { status: 'none', candidates: [] };
 
   let entries;
   try {
@@ -565,22 +624,283 @@ export async function getTotpForSite(origin, siteContext = {}, now = Date.now())
     entries = state.entries;
   } catch (error) {
     if (error.message === 'TOTP_LOCKED') {
-      return { status: 'locked', account: matched };
+      return { status: 'locked', account: matched[0].hint, count: matched.length, candidates: [] };
     }
-    return { status: 'none' };
+    return { status: 'none', candidates: [] };
   }
 
-  const entry = entries.find(item => item.id === matched.id);
-  if (!entry) return { status: 'none' };
-  const generated = await generateTotpCode(entry, now);
+  const candidates = [];
+  for (const { hint, siteScore } of matched) {
+    const entry = entries.find(item => item.id === hint.id);
+    if (!entry) continue;
+    const generated = await generateTotpCode(entry, now);
+    const accountEmail = hint.accountEmail || extractAccountEmail(entry.account, entry.issuer);
+    const accountMatchScore = scoreCandidateAccountMatch(entry, { ...hint, accountEmail }, siteContext);
+    candidates.push({
+      id: entry.id,
+      issuer: entry.issuer,
+      account: entry.account ?? '',
+      accountEmail,
+      domain: entry.domain ?? '',
+      siteScore,
+      accountMatchScore,
+      ...generated
+    });
+  }
+
+  if (!candidates.length) return { status: 'none', candidates: [] };
+  candidates.sort((a, b) => (b.accountMatchScore - a.accountMatchScore) || (b.siteScore - a.siteScore));
+
+  if (candidates.length === 1) {
+    return { status: 'found', ...candidates[0], candidates };
+  }
+  if (candidates[0].accountMatchScore > 0 && (candidates[0].accountMatchScore - candidates[1].accountMatchScore >= 5)) {
+    return { status: 'found', resolvedByAccount: true, ...candidates[0], candidates };
+  }
   return {
-    status: 'found',
-    id: entry.id,
-    issuer: entry.issuer,
-    account: entry.account ?? '',
-    domain: entry.domain ?? '',
-    ...generated
+    status: 'choose',
+    count: candidates.length,
+    candidates,
+    remainingSeconds: candidates[0].remainingSeconds,
+    period: candidates[0].period,
+    counter: candidates[0].counter
   };
+}
+
+export async function getTotpForSite(origin, siteContext = {}, now = Date.now()) {
+  return getTotpCandidatesForSite(origin, siteContext, now);
+}
+
+export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date.now()) {
+  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
+  const pinProtected = totpVault?.mode === 'pin';
+  let entries;
+  try {
+    const state = await readVaultAndKey();
+    entries = state.entries;
+  } catch (error) {
+    if (error.message === 'TOTP_LOCKED') {
+      return { status: 'locked', pinProtected: true, count: hints.length, items: [] };
+    }
+    return { status: 'ok', pinProtected: false, count: 0, items: [] };
+  }
+
+  const matchedMap = new Map(matchAllTotpHintsForSite(hints, origin, siteContext).map(m => [m.hint.id, m.siteScore]));
+  const items = [];
+  for (const entry of entries) {
+    const hint = hints.find(h => h.id === entry.id);
+    const siteScore = matchedMap.get(entry.id) ?? 0;
+    const isCurrentSite = siteScore >= 6;
+    const accountEmail = hint?.accountEmail || extractAccountEmail(entry.account, entry.issuer);
+    const accountMatchScore = isCurrentSite ? scoreCandidateAccountMatch(entry, { accountEmail }, siteContext) : 0;
+    const generated = await generateTotpCode(entry, now);
+    items.push({
+      id: entry.id,
+      issuer: entry.issuer,
+      account: entry.account ?? '',
+      accountEmail,
+      domain: entry.domain ?? '',
+      isCurrentSite,
+      siteScore,
+      accountMatchScore,
+      ...generated
+    });
+  }
+
+  items.sort((a, b) =>
+    Number(b.isCurrentSite) - Number(a.isCurrentSite) ||
+    (b.accountMatchScore - a.accountMatchScore) ||
+    (b.siteScore - a.siteScore) ||
+    String(a.issuer).localeCompare(String(b.issuer))
+  );
+
+  return { status: 'ok', pinProtected, unlocked: true, count: items.length, items };
+}
+
+function parseImportItems(rawText, fallback = {}) {
+  const raw = String(rawText ?? '').trim();
+  if (!raw) throw new Error('TOTP_INVALID_SECRET');
+
+  const parsedItems = [];
+  let hadEncrypted = false;
+  const pushParsed = (input, meta = {}) => {
+    try {
+      parsedItems.push(parseTotpInput(input, { ...fallback, ...meta }));
+    } catch { /* Skip non-TOTP/invalid entry cleanly. */ }
+  };
+
+  if (/^[\[{]/.test(raw)) {
+    let data;
+    try { data = JSON.parse(raw); } catch { data = null; }
+    if (data && typeof data === 'object') {
+      if (Array.isArray(data.items)) {
+        // Bitwarden export
+        for (const item of data.items) {
+          const totp = item?.login?.totp;
+          if (!totp) continue;
+          let domainHint = '';
+          const firstUri = item.login?.uris?.[0]?.uri;
+          if (firstUri) {
+            try { domainHint = rootDomainOf(new URL(firstUri).hostname); } catch { /* ignore */ }
+          }
+          pushParsed(totp, {
+            issuer: item.name || domainHint,
+            account: item.login?.username || '',
+            domain: domainHint
+          });
+        }
+      } else if (Array.isArray(data.services)) {
+        // 2FAS export
+        for (const svc of data.services) {
+          if (!svc?.secret || String(svc.otp?.tokenType ?? 'TOTP').toUpperCase() === 'HOTP') continue;
+          pushParsed(svc.secret, {
+            issuer: svc.name || svc.otp?.issuer || 'Account',
+            account: svc.otp?.account || svc.otp?.label || '',
+            algorithm: svc.otp?.algorithm,
+            digits: svc.otp?.digits,
+            period: svc.otp?.period
+          });
+        }
+      } else if (Array.isArray(data.db?.entries)) {
+        // Aegis export
+        for (const entry of data.db.entries) {
+          if (entry?.type && String(entry.type).toLowerCase() !== 'totp') continue;
+          if (!entry?.info?.secret) continue;
+          pushParsed(entry.info.secret, {
+            issuer: entry.issuer || entry.name || 'Account',
+            account: entry.name && entry.name !== entry.issuer ? entry.name : '',
+            algorithm: entry.info?.algo,
+            digits: entry.info?.digits,
+            period: entry.info?.period
+          });
+        }
+      } else if (Array.isArray(data.entries) || Array.isArray(data)) {
+        // CodeSnap JSON or generic array
+        const list = Array.isArray(data.entries) ? data.entries : data;
+        for (const entry of list) {
+          if (!entry || typeof entry !== 'object') continue;
+          const secretInput = entry.uri || entry.totp || entry.secret;
+          if (!secretInput) continue;
+          pushParsed(secretInput, {
+            issuer: entry.issuer || entry.name,
+            account: entry.account || entry.label || '',
+            domain: entry.domain || '',
+            explicitDomain: entry.domain || '',
+            algorithm: entry.algorithm,
+            digits: entry.digits,
+            period: entry.period
+          });
+        }
+      } else {
+        // Authenticator.cc (Authenticator Chrome extension) map export
+        for (const val of Object.values(data)) {
+          if (!val || typeof val !== 'object') continue;
+          if (val.encrypted) { hadEncrypted = true; continue; }
+          if (!val.secret || (val.type && !/totp/i.test(String(val.type)))) continue;
+          pushParsed(val.secret, {
+            issuer: val.issuer || val.account || 'Account',
+            account: val.account || '',
+            algorithm: val.algorithm,
+            digits: val.digits,
+            period: val.period
+          });
+        }
+      }
+      if (!parsedItems.length) {
+        throw new Error(hadEncrypted ? 'TOTP_IMPORT_ENCRYPTED_JSON' : 'TOTP_IMPORT_EMPTY');
+      }
+      return parsedItems;
+    }
+  }
+
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (/^otpauth:\/\/totp/i.test(line)) {
+      pushParsed(line);
+      continue;
+    }
+    if (/^otpauth-migration:\/\//i.test(line)) {
+      try {
+        parsedItems.push(...parseOtpAuthMigrationUri(line, fallback));
+      } catch { /* Ignore invalid migration URI line. */ }
+      continue;
+    }
+    if (/[,;\t]/.test(line)) {
+      const cells = line.split(/[,;\t]/).map(s => s.trim().replace(/^["']|["']$/g, ''));
+      let secretCol = -1;
+      for (let i = 0; i < cells.length; i++) {
+        try {
+          const clean = normalizeBase32(cells[i]);
+          if (clean.length >= 16) { secretCol = i; break; }
+        } catch { /* not secret col */ }
+      }
+      if (secretCol >= 0) {
+        const others = cells.filter((cell, idx) => idx !== secretCol && cell);
+        pushParsed(cells[secretCol], {
+          issuer: others[0] || fallback.issuer || 'Account',
+          account: others[1] || ''
+        });
+      }
+      continue;
+    }
+    if (/^[A-Z2-7\s\-=]{16,128}$/i.test(line)) {
+      pushParsed(line);
+    }
+  }
+
+  if (!parsedItems.length) throw new Error('TOTP_IMPORT_EMPTY');
+  return parsedItems;
+}
+
+export async function importTotpPayload(rawText, fallback = {}, now = Date.now()) {
+  const incoming = parseImportItems(rawText, fallback);
+  const { vault, entries } = await readVaultAndKey();
+  const nextEntries = [...entries];
+  let imported = 0;
+  let updated = 0;
+
+  for (const item of incoming) {
+    const existingIdx = nextEntries.findIndex(e =>
+      e.secret === item.secret && String(e.account ?? '').toLowerCase() === String(item.account ?? '').toLowerCase()
+    );
+    if (existingIdx >= 0) {
+      nextEntries[existingIdx] = { ...nextEntries[existingIdx], ...item };
+      updated++;
+    } else {
+      nextEntries.push({ id: crypto.randomUUID(), ...item, createdAt: now });
+      imported++;
+    }
+  }
+
+  await saveVaultEntries(nextEntries, vault);
+  return { ok: true, imported, updated, total: nextEntries.length };
+}
+
+export async function exportTotpVault(format = 'txt') {
+  const { entries } = await readVaultAndKey();
+  if (format === 'json') {
+    return JSON.stringify({
+      format: 'codesnap-totp',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      entries: entries.map(({ issuer, account, domain, secret, algorithm, digits, period }) => ({
+        issuer, account, domain, secret, algorithm, digits, period
+      }))
+    }, null, 2);
+  }
+  return entries.map(e => {
+    const label = e.account ? `${e.issuer}:${e.account}` : e.issuer;
+    const params = new URLSearchParams({
+      secret: e.secret,
+      issuer: e.issuer,
+      algorithm: e.algorithm || 'SHA1',
+      digits: String(e.digits || 6),
+      period: String(e.period || 30)
+    });
+    return `otpauth://totp/${encodeURIComponent(label)}?${params.toString()}`;
+  }).join('\n');
 }
 
 export async function getTotpById(id, now = Date.now()) {
@@ -604,7 +924,9 @@ export function describeTotpError(error) {
     TOTP_UNSUPPORTED_URI: 'Поддерживаются только TOTP-ключи (otpauth://totp/...).',
     TOTP_LOCKED: 'Хранилище 2FA заблокировано PIN-кодом.',
     TOTP_WRONG_PIN: 'Неверный PIN-код для разблокировки 2FA.',
-    TOTP_NOT_FOUND: 'Запись 2FA не найдена.'
+    TOTP_NOT_FOUND: 'Запись 2FA не найдена.',
+    TOTP_IMPORT_EMPTY: 'Не найдено ни одной 2FA-записи для импорта.',
+    TOTP_IMPORT_ENCRYPTED_JSON: 'Этот JSON-файл зашифрован паролем Authenticator. Экспортируйте незашифрованную копию (.txt с otpauth:// или обычный JSON) и импортируйте её.'
   };
   return map[error?.message] ?? 'Не удалось обработать 2FA-ключ локально.';
 }

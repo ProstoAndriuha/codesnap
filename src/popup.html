@@ -8,11 +8,20 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.0.1</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.1.0</span></div>
     <p data-i18n="tagline">Your email codes &amp; activation links, 100% locally.</p>
   </header>
 
   <main>
+    <nav class="mode-tabs" aria-label="Режим CodeSnap">
+      <button class="mode-tab active" id="modeMailBtn" type="button">✉ Почта и сайт</button>
+      <button class="mode-tab" id="modeAuthBtn" type="button">🔐 Аутентификатор <span class="mode-count" id="authCountBadge" hidden>0</span></button>
+      <button class="mode-popout" id="popoutAuthBtn" type="button" title="Открыть Аутентификатор в отдельном окне" aria-label="Open Authenticator window">⧉</button>
+    </nav>
+
+    <div id="authModeView" hidden></div>
+
+    <div id="mailModeView">
     <section class="card site-card" aria-labelledby="site">
       <div class="section-top"><span class="eyebrow" data-i18n="currentWebsite">CURRENT WEBSITE</span><span class="badge" id="fieldBadge" data-i18n="badgeChecking">Checking</span></div>
       <h1 id="site" data-i18n="checkingPage">Checking the page…</h1>
@@ -31,7 +40,9 @@
         <h2 id="totpTitle" data-i18n="totpTitle">2FA Authenticator</h2>
         <div class="totp-head-actions">
           <button class="text-button" id="totpLockBtn" type="button" hidden>🔒 Lock</button>
+          <button class="text-button" id="totpOpenImportBtn" type="button">⚙ Импорт</button>
           <button class="text-button" id="totpToggleAdd" type="button" data-i18n="totpAddToggle">+ Add 2FA key</button>
+          <button class="text-button" id="totpOpenAllBtn" type="button">Все →</button>
         </div>
       </div>
       <div id="totpResult" class="totp-result"></div>
@@ -119,6 +130,7 @@
       <p class="pro-note" data-i18n="proNote">All features run locally in your browser without external CodeSnap servers.</p>
     </section>
     <p class="footer-note" id="trust" data-i18n="footerTrust">CodeSnap never submits forms or opens links automatically.</p>
+    </div>
   </main>
   <script type="module" src="popup.js"></script>
 </body>

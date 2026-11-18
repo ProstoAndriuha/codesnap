@@ -2,11 +2,12 @@
 
 Chrome Manifest V3 extension: find recent email verification codes and confirmation/activation links across 12+ mail providers — plus built-in encrypted 2FA TOTP & 1-click Dual Fill — **100% locally in your browser**. Never submits website forms or opens links without your click.
 
-Version 1.0.1. Zero backend servers, zero Python, zero helper ZIPs, zero stored mail passwords.
+Version 1.1.0. Zero backend servers, zero Python, zero helper ZIPs, zero stored mail passwords.
 
 - **Gmail**: direct Google OAuth + Gmail API (multiple accounts), or open Gmail Web tab.
 - **Yandex, Outlook / Hotmail, Yahoo, Mail.ru, Proton Mail, iCloud, Zoho, Rambler, Fastmail, AOL, GMX**: read recent verification codes and activation links locally from open webmail tabs in Chrome with **0 ms instant push** when a new email arrives — without sharing passwords or using any external server.
-- **Built-in Local 2FA (TOTP) + Dual Fill**: AES-256-GCM encrypted TOTP vault (with optional PBKDF2 PIN), `otpauth://` / QR / manual key capture, strict site-only 2FA activation, live countdown timers, and **1-click Dual Fill** (inserting Email OTP + 2FA TOTP simultaneously on dual-field dialogs).
+- **Built-in Local Authenticator (TOTP), Bulk Import/Export & Pop-out Window**: full Authenticator view & standalone window showing all saved 2FA codes with live 30-second pie timers and instant search, offline QR (`jsQR`) scanner, plus 1-click import/export (Authenticator `.txt`/`.json`, `.2fas`, Aegis, Bitwarden, `otpauth-migration://`, CSV, QR PNG/SVG).
+- **Smart Multi-Account Matching + 1-Click Dual Fill**: automatically picks the matching 2FA account by typed login email, masked email, or verified OTP mailbox — or shows an account-labeled chooser (`Email + 2FA`) if multiple accounts match the same website.
 - **Quick Hotkey, Context Menu, Mute & Smart Learning**: `Alt+Shift+V` shortcut & right-click menu, 45-second clipboard auto-clear, per-site chip muting, and automatic per-site mailbox learning (`learnedAccounts`).
 - **Optional direct local APIs**: Fastmail JMAP API token (`https://api.fastmail.com/*`) and Outlook Microsoft Graph PKCE (`https://graph.microsoft.com/*`) directly from your browser.
 

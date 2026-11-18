@@ -35,7 +35,17 @@ export const ECOSYSTEMS = Object.freeze([
   { siteDomains: ['tbank.ru', 'tinkoff.ru'], mailDomains: ['tbank.ru', 'tinkoff.ru'], aliases: ['t-bank', 'т-банк', 'tinkoff', 'тинькофф'] },
   { siteDomains: ['binance.com'], mailDomains: ['binance.com', 'ses.binance.com', 'mail.binance.com', 'post.binance.com'], aliases: ['binance'] },
   { siteDomains: ['bybit.com'], mailDomains: ['bybit.com', 'mail.bybit.com', 'notification.bybit.com'], aliases: ['bybit'] },
-  { siteDomains: ['okx.com'], mailDomains: ['okx.com', 'mail.okx.com', 'okex.com'], aliases: ['okx'] }
+  { siteDomains: ['okx.com', 'okex.com'], mailDomains: ['okx.com', 'mail.okx.com', 'okex.com'], aliases: ['okx', 'okex'] },
+  { siteDomains: ['kcex.com'], mailDomains: ['kcex.com', 'mail.kcex.com'], aliases: ['kcex'] },
+  { siteDomains: ['onebullex.com'], mailDomains: ['onebullex.com', 'mail.onebullex.com'], aliases: ['onebullex'] },
+  { siteDomains: ['bitget.com'], mailDomains: ['bitget.com', 'mail.bitget.com'], aliases: ['bitget'] },
+  { siteDomains: ['mexc.com'], mailDomains: ['mexc.com', 'mail.mexc.com'], aliases: ['mexc'] },
+  { siteDomains: ['gate.io'], mailDomains: ['gate.io', 'mail.gate.io'], aliases: ['gate.io', 'gate'] },
+  { siteDomains: ['kucoin.com'], mailDomains: ['kucoin.com', 'mail.kucoin.com'], aliases: ['kucoin'] },
+  { siteDomains: ['bingx.com'], mailDomains: ['bingx.com', 'mail.bingx.com'], aliases: ['bingx'] },
+  { siteDomains: ['htx.com', 'huobi.com'], mailDomains: ['htx.com', 'huobi.com', 'mail.htx.com'], aliases: ['htx', 'huobi'] },
+  { siteDomains: ['kraken.com'], mailDomains: ['kraken.com', 'email.kraken.com'], aliases: ['kraken'] },
+  { siteDomains: ['coinbase.com'], mailDomains: ['coinbase.com', 'mail.coinbase.com'], aliases: ['coinbase'] }
 ]);
 
 const SHARED_SUFFIX_REGEX = /(?:^|\.)(?:github\.io|pages\.dev|vercel\.app|netlify\.app|web\.app|appspot\.com|herokuapp\.com|onrender\.com|railway\.app|fly\.dev|supabase\.co|firebaseapp\.com|workers\.dev)$/;
