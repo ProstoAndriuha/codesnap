@@ -85,7 +85,12 @@ select:focus-visible,button:focus-visible,.switch input:focus-visible+.slider{ou
 .mail-flow{margin-top:12px;padding:12px;background:#edf1ff;border-radius:10px;font-size:12px}
 .mail-flow strong{display:block;font-size:22px;letter-spacing:2px;color:#4056c5}
 .mail-flow a{display:block;margin:8px 0;color:#4056c5}
-.site-actions-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+.site-actions-row{display:flex;align-items:center;flex-wrap:wrap;justify-content:space-between;gap:6px;margin-top:8px}
+.phishing-banner{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;padding:10px 12px;border:1.5px solid #e11d48;border-radius:12px;background:#fff1f2;color:#9f1239;font-size:11.5px;font-weight:650;line-height:1.4}
+.phishing-banner[hidden]{display:none}
+.phishing-banner .danger{align-self:flex-start;color:#b91c1c;font-weight:750}
+.totp-sec.expiring{background:#fef3c7;color:#b45309}
+.totp-progress-bar.expiring{background:#e08b26}
 .hotkey-hint{margin-left:auto;padding:2px 7px;border:1px solid #e0e6f5;border-radius:6px;background:#f7f9ff;color:#6f7d99;font:650 10px ui-monospace,SFMono-Regular,Menlo,monospace}
 .expiry-pill{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#e4eaff;color:#384ec0;font:700 10px system-ui;font-variant-numeric:tabular-nums}
 .expiry-pill.expired{background:#ffecef;color:#b42336}

@@ -1,4 +1,4 @@
-import { siteForOrigin, trustedOrigin, normalizeSender, rankCandidates, candidateIsFresh, siteIdentity, subjectMatches, SEARCH_WINDOW_SECONDS } from './core.js';
+import { siteForOrigin, trustedOrigin, normalizeSender, rankCandidates, candidateIsFresh, siteIdentity, subjectMatches, SEARCH_WINDOW_SECONDS, checkPhishingRisk } from './core.js';
 import { findMessages, findHistoryMessages, getGmailHistoryId } from './gmail.js';
 import { SessionStore } from './sessions.js';
 import { getAccessTokens, forgetAdditional } from './auth.js';
@@ -29,14 +29,32 @@ import {
   importTotpPayload,
   exportTotpVault,
   refreshTotpSiteHints,
+  TOTP_GRACE_SECONDS,
+  awaitFreshTotpResult,
   describeTotpError
 } from './totp.js';
+import { decodeCroppedQrDataUrl, classifyQrStringsForTotp } from './qr-scanner.js';
 
 let hintsRefreshed = false;
 async function ensureTotpHintsFresh() {
   if (hintsRefreshed) return;
   hintsRefreshed = true;
   await refreshTotpSiteHints().catch(() => {});
+}
+
+async function getOriginPhishingAlert(origin) {
+  if (!origin?.startsWith('https://')) return { suspicious: false };
+  const { totpSiteHints = [], phishingTrustedOrigins = [] } = await chrome.storage.local.get(['totpSiteHints', 'phishingTrustedOrigins']);
+  const extraDomains = (Array.isArray(totpSiteHints) ? totpSiteHints : []).flatMap(h => [h.domain, ...(h.matchDomains ?? [])]).filter(Boolean);
+  return checkPhishingRisk(origin, extraDomains, Array.isArray(phishingTrustedOrigins) ? phishingTrustedOrigins : []);
+}
+
+function phishingBlockedPayload(alert) {
+  return {
+    status: 'phishing_blocked',
+    phishingAlert: alert,
+    message: `⚠️ Внимание! Домен ${alert.hostname} похож на фишинговый клон ${alert.targetDomain}. Вставка заблокирована.`
+  };
 }
 
 const sessions = new SessionStore();
@@ -273,6 +291,8 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
 }
 
 async function insert({ tabId, frameId = 0, origin, sessionId }) {
+  const phishingAlert = await getOriginPhishingAlert(origin);
+  if (phishingAlert.suspicious) return phishingBlockedPayload(phishingAlert);
   const key = sessionKey(tabId, frameId);
   const item = sessions.valid(key, origin, sessionId);
   if (!item || !item.code) return { status: 'expired', message: 'Code expired. Search again.' };
@@ -290,6 +310,8 @@ async function insert({ tabId, frameId = 0, origin, sessionId }) {
 }
 
 async function openLink({ tabId, frameId = 0, origin, sessionId }) {
+  const phishingAlert = await getOriginPhishingAlert(origin);
+  if (phishingAlert.suspicious) return phishingBlockedPayload(phishingAlert);
   const key = sessionKey(tabId, frameId);
   const item = sessions.valid(key, origin, sessionId);
   if (!item || !item.link?.url) return { status: 'expired', message: 'Link expired. Search again.' };
@@ -326,6 +348,8 @@ async function rememberSender(item) {
 }
 
 async function insertDual({ tabId, frameId = 0, origin, sessionId, siteContext = {}, totpId = null }) {
+  const phishingAlert = await getOriginPhishingAlert(origin);
+  if (phishingAlert.suspicious) return phishingBlockedPayload(phishingAlert);
   const key = sessionKey(tabId, frameId);
   const item = sessions.valid(key, origin, sessionId);
   if (!item || !item.code) return { status: 'expired', message: 'Email code expired. Search again.' };
@@ -333,7 +357,9 @@ async function insertDual({ tabId, frameId = 0, origin, sessionId, siteContext =
   if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
   if (item.siteId !== 'generic' && !trustedOrigin(origin, item.siteId)) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
   const mergedCtx = { ...(siteContext ?? item.siteContext ?? {}), matchedEmailAccount: item.accountEmail ?? null };
-  const totp = totpId ? await getTotpById(totpId) : await getTotpCandidatesForSite(origin, mergedCtx);
+  const totp = await awaitFreshTotpResult(now =>
+    totpId ? getTotpById(totpId, now) : getTotpCandidatesForSite(origin, mergedCtx, now)
+  );
   if (totp.status === 'choose') {
     return { status: 'choose_totp', candidates: totp.candidates, message: 'Выберите нужный аккаунт 2FA.' };
   }
@@ -459,12 +485,20 @@ async function triggerQuickFill(tab, info = null) {
   if (!origin?.startsWith('https://')) return { status: 'unsupported', message: 'Open an HTTPS website first.' };
 
   const siteId = siteForOrigin(origin) ?? 'generic';
+  const phishingAlert = await getOriginPhishingAlert(origin);
+  if (phishingAlert.suspicious) {
+    await notifyInlineToast(tabId, frameId, `⚠️ Блокировка фишинга: похоже на клон ${phishingAlert.targetDomain}!`);
+    return { status: 'phishing_blocked', phishingAlert };
+  }
   const siteContext = status?.siteContext ?? {};
   const totp = await getTotpForSite(origin, siteContext);
 
   if (status?.isDualField && totp.status === 'found') {
     const emailRes = await search({ tabId, frameId, origin, siteId, fieldId: status.fieldId, detectedAt: status.detectedAt, siteContext, channel: 'email', automatic: false, inline: false });
     if (emailRes.status === 'found' && emailRes.code) {
+      if (totp.remainingSeconds <= TOTP_GRACE_SECONDS) {
+        await notifyInlineToast(tabId, frameId, '⏳ До смены 2FA ≤3с — ждём свежий код…');
+      }
       const dual = await insertDual({ tabId, frameId, origin, sessionId: emailRes.sessionId, siteContext });
       if (dual?.status === 'inserted_dual') {
         await notifyInlineToast(tabId, frameId, '✓ Оба кода (Почта + 2FA) вставлены');
@@ -480,15 +514,20 @@ async function triggerQuickFill(tab, info = null) {
       return { status: 'choose', count: totp.candidates.length };
     }
     if (totp.status === 'found') {
-      const inserted = await chrome.tabs.sendMessage(tabId, { type: 'INSERT_TOTP', code: totp.code, origin }, { frameId }).catch(() => null);
-      if (inserted?.status === 'inserted') {
-        await notifyInlineToast(tabId, frameId, '✓ Код 2FA вставлен');
-        return { status: 'inserted_totp', code: totp.code };
+      let freshTotp = totp;
+      if (totp.remainingSeconds <= TOTP_GRACE_SECONDS) {
+        await notifyInlineToast(tabId, frameId, '⏳ До смены 2FA ≤3с — ждём свежий 30-сек код…');
+        freshTotp = await awaitFreshTotpResult(now => getTotpById(totp.id, now));
       }
-      if (await copyViaOffscreen(totp.code)) {
+      const inserted = await chrome.tabs.sendMessage(tabId, { type: 'INSERT_TOTP', code: freshTotp.code, origin }, { frameId }).catch(() => null);
+      if (inserted?.status === 'inserted') {
+        await notifyInlineToast(tabId, frameId, freshTotp.waitedForNextWindow ? '✓ Свежий код 2FA вставлен' : '✓ Код 2FA вставлен');
+        return { status: 'inserted_totp', code: freshTotp.code, waitedForNextWindow: Boolean(freshTotp.waitedForNextWindow) };
+      }
+      if (await copyViaOffscreen(freshTotp.code)) {
         await scheduleClipboardClear();
-        await notifyInlineToast(tabId, frameId, `✓ Код 2FA ${totp.code} скопирован`);
-        return { status: 'copied_totp', code: totp.code };
+        await notifyInlineToast(tabId, frameId, `✓ Код 2FA ${freshTotp.code} скопирован`);
+        return { status: 'copied_totp', code: freshTotp.code, waitedForNextWindow: Boolean(freshTotp.waitedForNextWindow) };
       }
       return { status: 'error' };
     }
@@ -602,7 +641,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
             matchedEmailAccount: payload.matchedEmailAccount || (tabSession?.status === 'found' ? tabSession.accountEmail : null)
           };
           const siteMatch = payload.origin ? await getTotpCandidatesForSite(payload.origin, mergedCtx) : { status: 'none', candidates: [] };
-          return { status: 'ok', ...vaultStatus, siteMatch };
+          const phishingAlert = payload.origin ? await getOriginPhishingAlert(payload.origin) : { suspicious: false };
+          return { status: 'ok', ...vaultStatus, siteMatch, phishingAlert };
         }
         if (command === 'list_all') {
           await ensureTotpHintsFresh();
@@ -612,7 +652,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
             matchedEmailAccount: payload.matchedEmailAccount || (tabSession?.status === 'found' ? tabSession.accountEmail : null)
           };
           const list = await listAllTotpCodes(payload.origin || '', mergedCtx);
-          return { ...list, status: 'ok', vaultLocked: list.status === 'locked' };
+          const phishingAlert = payload.origin ? await getOriginPhishingAlert(payload.origin) : { suspicious: false };
+          return { ...list, status: 'ok', vaultLocked: list.status === 'locked', phishingAlert };
         }
         if (command === 'add') return { status: 'ok', ...await addTotpAccount(payload.input, payload.meta ?? {}) };
         if (command === 'update') return await updateTotpAccount(payload.id, payload.patch ?? {});
@@ -648,19 +689,99 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
         if (command === 'lock') return { status: 'ok', ...await lockTotpVault() };
         if (command === 'set_pin') return { status: 'ok', ...await setTotpPassphrase(payload.newPassphrase, payload.currentPassphrase) };
         if (command === 'code_by_id') return { status: 'ok', ...await getTotpById(payload.id) };
+        if (command === 'fresh_code_by_id') {
+          const fresh = await awaitFreshTotpResult(now => getTotpById(payload.id, now));
+          return { status: 'ok', ...fresh };
+        }
         if (command === 'insert_totp') {
-          const totp = payload.id ? await getTotpById(payload.id) : await getTotpForSite(payload.origin, payload.siteContext ?? {});
+          const phishingAlert = await getOriginPhishingAlert(payload.origin);
+          if (phishingAlert.suspicious) return phishingBlockedPayload(phishingAlert);
+          const totp = await awaitFreshTotpResult(now =>
+            payload.id ? getTotpById(payload.id, now) : getTotpForSite(payload.origin, payload.siteContext ?? {}, now)
+          );
           if (totp.status !== 'found') return { status: 'error', message: totp.status === 'locked' ? 'Разблокируйте 2FA PIN-кодом.' : 'Подходящий 2FA-секрет не найден.' };
           if (!Number.isInteger(payload.tabId) || !(await tabMatches(payload.tabId, payload.origin))) {
             return { status: 'changed', message: 'The verification page changed.' };
           }
           const res = await chrome.tabs.sendMessage(payload.tabId, { type: 'INSERT_TOTP', code: totp.code, origin: payload.origin }, { frameId: 0 });
-          return res ?? { status: 'error', message: '2FA field not found.' };
+          return { ...(res ?? { status: 'error', message: '2FA field not found.' }), code: totp.code, remainingSeconds: totp.remainingSeconds, waitedForNextWindow: Boolean(totp.waitedForNextWindow) };
         }
         return { status: 'untrusted', message: 'Invalid request.' };
       } catch (error) {
         return { status: 'error', message: describeTotpError(error) };
       }
+    }
+    if (request.type === 'TRUST_PHISHING_ORIGIN') {
+      const isExtPage = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
+      const fromMatchingTab = Boolean(sender.tab?.id && originOf(sender.url) === request.origin);
+      if ((!isExtPage && !fromMatchingTab) || !request.origin?.startsWith('https://')) {
+        return { status: 'untrusted', message: 'Invalid request.' };
+      }
+      const { phishingTrustedOrigins = [] } = await chrome.storage.local.get('phishingTrustedOrigins');
+      const next = [...new Set([...(Array.isArray(phishingTrustedOrigins) ? phishingTrustedOrigins : []), request.origin])];
+      await chrome.storage.local.set({ phishingTrustedOrigins: next });
+      return { status: 'ok', trustedOrigins: next };
+    }
+    if (request.type === 'START_QR_SNIPER') {
+      const isExtPage = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
+      if (!isExtPage || !Number.isInteger(request.tabId)) return { status: 'untrusted', message: 'Invalid tab.' };
+      const res = await chrome.tabs.sendMessage(request.tabId, { type: 'BEGIN_QR_SNIPER' }, { frameId: 0 }).catch(() => null);
+      return res ?? { status: 'error', message: 'Обновите страницу (F5) и попробуйте снова.' };
+    }
+    if (request.type === 'FINISH_QR_SNIPER') {
+      if (!sender.tab?.id || !request.origin?.startsWith('https://')) return { status: 'untrusted', message: 'Invalid page.' };
+      if (sender.url && originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid origin.' };
+      let shot = null;
+      if (typeof chrome.tabs?.captureVisibleTab === 'function') {
+        try { shot = await chrome.tabs.captureVisibleTab(sender.tab.windowId ?? null, { format: 'png' }); }
+        catch { try { shot = await chrome.tabs.captureVisibleTab({ format: 'png' }); } catch { shot = null; } }
+      }
+      const host = new URL(request.origin).hostname.replace(/^www\./, '');
+      const decoded = new Set();
+      if (shot) {
+        for (const str of await decodeCroppedQrDataUrl(shot, request.rect)) decoded.add(str);
+      }
+      let classified = classifyQrStringsForTotp([...decoded], { issuer: host, domain: host });
+      if (classified.status !== 'found' && Array.isArray(request.regionVisualUrls)) {
+        const domDecoded = [];
+        for (const vUrl of request.regionVisualUrls) {
+          domDecoded.push(...await decodeCroppedQrDataUrl(vUrl, null));
+        }
+        classified = classifyQrStringsForTotp(domDecoded, { issuer: host, domain: host });
+      }
+      if (classified.status !== 'found') {
+        await notifyInlineToast(sender.tab.id, sender.frameId ?? 0, classified.message || 'QR-код 2FA в выделении не найден.');
+        return classified;
+      }
+      const added = [];
+      for (const item of classified.entries) {
+        added.push(await addTotpAccount(item.secret, {
+          issuer: item.issuer || host,
+          account: item.account,
+          domain: item.domain || host,
+          algorithm: item.algorithm,
+          digits: item.digits,
+          period: item.period
+        }));
+      }
+      const first = added[0];
+      await notifyInlineToast(sender.tab.id, sender.frameId ?? 0, `✓ 2FA добавлен: ${first.account.issuer} (${first.code})`);
+      return { status: 'ok', count: added.length, first };
+    }
+    if (request.type === 'START_FIELD_PICKER') {
+      const isExtPage = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
+      if (!isExtPage || !Number.isInteger(request.tabId)) return { status: 'untrusted', message: 'Invalid tab.' };
+      const res = await chrome.tabs.sendMessage(request.tabId, { type: 'BEGIN_FIELD_PICKER', defaultChannel: request.defaultChannel || 'email' }, { frameId: 0 }).catch(() => null);
+      return res ?? { status: 'error', message: 'Обновите страницу (F5) и попробуйте снова.' };
+    }
+    if (request.type === 'CLEAR_CUSTOM_FIELD') {
+      const isExtPage = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
+      if (!isExtPage || !request.origin?.startsWith('https://')) return { status: 'untrusted', message: 'Invalid request.' };
+      const { customFieldSelectors = {} } = await chrome.storage.local.get('customFieldSelectors');
+      const next = { ...(customFieldSelectors ?? {}) };
+      delete next[request.origin];
+      await chrome.storage.local.set({ customFieldSelectors: next });
+      return { status: 'ok' };
     }
     if (request.type === 'GET_TOTP_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
@@ -675,12 +796,17 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     }
     if (request.type === 'INSERT_TOTP_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
-      const totp = request.totpId
-        ? await getTotpById(request.totpId)
-        : await getTotpCandidatesForSite(request.origin, { ...(request.siteContext ?? {}), matchedEmailAccount: request.matchedEmailAccount || null });
+      const phishingAlert = await getOriginPhishingAlert(request.origin);
+      if (phishingAlert.suspicious) return phishingBlockedPayload(phishingAlert);
+      const totp = await awaitFreshTotpResult(now =>
+        request.totpId
+          ? getTotpById(request.totpId, now)
+          : getTotpCandidatesForSite(request.origin, { ...(request.siteContext ?? {}), matchedEmailAccount: request.matchedEmailAccount || null }, now)
+      );
       if (totp.status === 'choose') return { status: 'choose', candidates: totp.candidates };
       if (totp.status !== 'found') return { status: totp.status === 'locked' ? 'locked' : 'expired', message: '2FA code unavailable.' };
-      return chrome.tabs.sendMessage(sender.tab.id, { type: 'INSERT_TOTP', code: totp.code, origin: request.origin }, { frameId: sender.frameId ?? 0 });
+      const ins = await chrome.tabs.sendMessage(sender.tab.id, { type: 'INSERT_TOTP', code: totp.code, origin: request.origin }, { frameId: sender.frameId ?? 0 });
+      return { ...(ins ?? { status: 'error' }), code: totp.code, remainingSeconds: totp.remainingSeconds, counter: totp.counter, waitedForNextWindow: Boolean(totp.waitedForNextWindow) };
     }
     if (request.type === 'INSERT_DUAL_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };

@@ -76,6 +76,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   let lastCounterKey = '';
   let statusMsg = '';
   let statusTone = 'info';
+  let phishingAlert = { suspicious: false };
   let ticker = null;
 
   container.replaceChildren();
@@ -117,6 +118,18 @@ export async function mountAuthenticatorView(container, options = {}) {
   scanBtn.title = 'Сканировать QR-код со страницы';
   scanBtn.textContent = '📷';
 
+  const sniperBtn = document.createElement('button');
+  sniperBtn.type = 'button';
+  sniperBtn.className = 'auth-icon-btn';
+  sniperBtn.title = 'Выделить QR-код областью на экране';
+  sniperBtn.textContent = '🎯';
+
+  const pickBtn = document.createElement('button');
+  pickBtn.type = 'button';
+  pickBtn.className = 'auth-icon-btn';
+  pickBtn.title = 'Указать 2FA-поле на сайте вручную';
+  pickBtn.textContent = '📍';
+
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'auth-icon-btn';
@@ -129,7 +142,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   editBtn.title = 'Редактировать или удалить записи';
   editBtn.textContent = '✏';
 
-  rightBtns.append(scanBtn, addBtn, editBtn);
+  rightBtns.append(scanBtn, sniperBtn, pickBtn, addBtn, editBtn);
   bar.append(leftBtns, title, rightBtns);
 
   // Search box
@@ -150,7 +163,11 @@ export async function mountAuthenticatorView(container, options = {}) {
   statusEl.className = 'totp-status';
   statusEl.hidden = true;
 
-  // Collapsible drawer (Import/Export, Add, PIN, or Unlock)
+  // Phishing alert banner + Collapsible drawer
+  const phishBanner = document.createElement('div');
+  phishBanner.className = 'phishing-banner';
+  phishBanner.hidden = true;
+
   const drawer = document.createElement('div');
   drawer.className = 'auth-drawer';
   drawer.hidden = true;
@@ -159,7 +176,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   const listEl = document.createElement('div');
   listEl.className = 'auth-list';
 
-  root.append(bar, searchWrap, statusEl, drawer, listEl);
+  root.append(bar, searchWrap, statusEl, phishBanner, drawer, listEl);
   container.append(root);
 
   function setStatus(msg, tone = 'info') {
@@ -399,11 +416,17 @@ export async function mountAuthenticatorView(container, options = {}) {
 
   async function handleCardClick(item) {
     if (editMode) return;
+    if (phishingAlert?.suspicious) {
+      setStatus(`⚠️ Вставка заблокирована: ${phishingAlert.hostname} похож на фишинговый клон ${phishingAlert.targetDomain}.`, 'err');
+      return;
+    }
+    const remSec = (item.period || 30) - (((Math.floor(Date.now() / 1000) % (item.period || 30)) + (item.period || 30)) % (item.period || 30));
     if (activeTab?.id && (item.isCurrentSite || has2faField) && activeOrigin.startsWith('https://')) {
       try {
+        if (remSec <= 3) setStatus('⏳ Осталось ≤3с — ждём свежий 30-сек код…', 'info');
         const res = await sendTotpAction({ command: 'insert_totp', tabId: activeTab.id, origin: activeOrigin, id: item.id });
         if (res?.status === 'inserted') {
-          setStatus(`✓ Код ${item.issuer} вставлен в поле на сайте`, 'ok');
+          setStatus(res.waitedForNextWindow ? `✓ Свежий код ${item.issuer} вставлен в поле на сайте` : `✓ Код ${item.issuer} вставлен в поле на сайте`, 'ok');
           if (!item.isCurrentSite) {
             const host = new URL(activeOrigin).hostname.replace(/^www\./, '');
             const bindBtn = document.createElement('button');
@@ -422,14 +445,20 @@ export async function mountAuthenticatorView(container, options = {}) {
         }
       } catch { /* Fallback to clipboard copy cleanly. */ }
     }
+    let codeToCopy = item.code;
+    if (remSec <= 3) {
+      setStatus('⏳ Осталось ≤3с — ждём свежий 30-сек код…', 'info');
+      const fresh = await sendTotpAction({ command: 'fresh_code_by_id', id: item.id }).catch(() => null);
+      if (fresh?.code) codeToCopy = fresh.code;
+    }
     try {
-      await navigator.clipboard.writeText(item.code);
+      await navigator.clipboard.writeText(codeToCopy);
       chrome.runtime.sendMessage({ type: 'CLIPBOARD_COPIED' }).catch(() => {});
-      setStatus(`✓ Код ${formatCodeDisplay(item.code)} (${item.issuer}) скопирован (очистится через 45 сек)`, 'ok');
+      setStatus(`✓ Код ${formatCodeDisplay(codeToCopy)} (${item.issuer}) скопирован (очистится через 45 сек)`, 'ok');
     } catch {
-      const res = await chrome.runtime.sendMessage({ type: 'COPY_CLIPBOARD', text: item.code }).catch(() => null);
+      const res = await chrome.runtime.sendMessage({ type: 'COPY_CLIPBOARD', text: codeToCopy }).catch(() => null);
       if (res?.status === 'copied') {
-        setStatus(`✓ Код ${formatCodeDisplay(item.code)} скопирован`, 'ok');
+        setStatus(`✓ Код ${formatCodeDisplay(codeToCopy)} скопирован`, 'ok');
       } else {
         setStatus('Не удалось скопировать код.', 'err');
       }
@@ -567,6 +596,26 @@ export async function mountAuthenticatorView(container, options = {}) {
     }
   }
 
+  function renderPhishingBanner() {
+    phishBanner.replaceChildren();
+    if (!phishingAlert?.suspicious) {
+      phishBanner.hidden = true;
+      return;
+    }
+    phishBanner.hidden = false;
+    const msg = document.createElement('span');
+    msg.textContent = `⚠️ Внимание: ${phishingAlert.hostname} похож на фишинговый клон ${phishingAlert.targetDomain}. Вставка заблокирована.`;
+    const trust = document.createElement('button');
+    trust.type = 'button';
+    trust.className = 'text-button danger';
+    trust.textContent = 'Доверять этому сайту';
+    trust.addEventListener('click', async () => {
+      await chrome.runtime.sendMessage({ type: 'TRUST_PHISHING_ORIGIN', origin: activeOrigin }).catch(() => {});
+      await refreshList();
+    });
+    phishBanner.append(msg, trust);
+  }
+
   async function refreshList() {
     try {
       const res = await sendTotpAction({
@@ -577,9 +626,11 @@ export async function mountAuthenticatorView(container, options = {}) {
       });
       pinProtected = Boolean(res.pinProtected);
       vaultLocked = Boolean(res.vaultLocked);
+      phishingAlert = res.phishingAlert ?? { suspicious: false };
       items = Array.isArray(res.items) ? res.items : [];
       lastCounterKey = items.map(it => `${it.id}:${Math.floor(Date.now() / 1000 / (it.period || 30))}`).join(',');
       options.onCountChange?.(res.count ?? items.length);
+      renderPhishingBanner();
       renderDrawer();
       renderList();
     } catch (err) {
@@ -626,6 +677,24 @@ export async function mountAuthenticatorView(container, options = {}) {
     } finally {
       scanBtn.disabled = false;
     }
+  });
+  sniperBtn.addEventListener('click', async () => {
+    if (!activeTab?.id || !activeOrigin.startsWith('https://')) {
+      setStatus('Откройте HTTPS-страницу с QR-кодом.', 'err');
+      return;
+    }
+    const res = await chrome.runtime.sendMessage({ type: 'START_QR_SNIPER', tabId: activeTab.id }).catch(() => null);
+    if (res?.status === 'started') window.close?.();
+    else setStatus(res?.message ?? 'Обновите страницу (F5) и попробуйте снова.', 'err');
+  });
+  pickBtn.addEventListener('click', async () => {
+    if (!activeTab?.id || !activeOrigin.startsWith('https://')) {
+      setStatus('Откройте HTTPS-страницу сайта с полем 2FA.', 'err');
+      return;
+    }
+    const res = await chrome.runtime.sendMessage({ type: 'START_FIELD_PICKER', tabId: activeTab.id, defaultChannel: 'authenticator' }).catch(() => null);
+    if (res?.status === 'started') window.close?.();
+    else setStatus(res?.message ?? 'Обновите страницу (F5) и попробуйте снова.', 'err');
   });
 
   searchInput.addEventListener('input', () => {

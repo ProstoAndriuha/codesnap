@@ -28,6 +28,11 @@
   let totpEnabled = false;
   let totpSiteHints = [];
   let mutedOrigins = [];
+  let phishingTrustedOrigins = [];
+  let customFieldSelectors = {};
+  let phishingAlert = { suspicious: false };
+  let sniperHost = null;
+  let pickerState = null;
   let codeDetails = null;
   let choices = null;
   let totpDetails = null;
@@ -69,6 +74,10 @@
 
   function isOriginMuted() {
     return Array.isArray(mutedOrigins) && mutedOrigins.includes(location.origin);
+  }
+
+  function currentCustomField() {
+    return customFieldSelectors?.[location.origin] ?? null;
   }
 
   function siteHasTotpHint() {
@@ -218,38 +227,82 @@
     root.append(box); document.documentElement.append(host); panel = host;
   }
 
+  function applyChipAppearance(isDanger = false, isGrace = false) {
+    if (!chip) return;
+    const dark = isDarkTheme();
+    if (isDanger) {
+      chip.style.background = dark ? '#3b151c' : '#fff1f2';
+      chip.style.color = dark ? '#fda4af' : '#b91c1c';
+      chip.style.borderColor = '#dc2626';
+    } else if (isGrace) {
+      chip.style.background = dark ? '#322410' : '#fff8eb';
+      chip.style.color = dark ? '#fcd34d' : '#b45309';
+      chip.style.borderColor = '#e08b26';
+    } else {
+      chip.style.background = dark ? 'rgba(21,28,48,.92)' : 'rgba(255,255,255,.88)';
+      chip.style.color = dark ? '#e8ebff' : '#3449be';
+      chip.style.borderColor = dark ? 'rgba(99,122,230,.5)' : 'rgba(113,130,181,.35)';
+    }
+    chip.style.boxShadow = dark ? '0 4px 18px rgba(0,0,0,.6)' : '0 4px 18px #14245536';
+  }
+
   function updateChipDisplay() {
     if (!chip || reloadRequired || completedFieldId === fieldId) return;
+    if (phishingAlert?.suspicious) {
+      chip.textContent = '⚠️ Фишинг?';
+      chip.title = `Внимание: ${phishingAlert.hostname} похож на ${phishingAlert.targetDomain}. Нажмите для подробностей.`;
+      applyChipAppearance(true, false);
+      return;
+    }
     if (field?.channel === 'authenticator') {
       if (totpDetails?.status === 'found') {
         const rem = totpDetails.remainingSeconds ?? 30;
         const acct = totpDetails.accountEmail || totpDetails.account || totpDetails.issuer;
-        chip.textContent = `${totpDetails.code} · ${rem}s`;
-        chip.title = `2FA (${acct}) · ${rem}s · Click once to insert`;
+        if (rem <= 3) {
+          chip.textContent = `⏳ ${rem}s → новый`;
+          chip.title = `2FA (${acct}) · осталось ${rem}с — при клике подождём свежий 30-сек код`;
+          applyChipAppearance(false, true);
+        } else {
+          chip.textContent = `${totpDetails.code} · ${rem}s`;
+          chip.title = `2FA (${acct}) · ${rem}s · Click once to insert`;
+          applyChipAppearance(false, false);
+        }
       } else if (totpDetails?.status === 'choose') {
         chip.textContent = `🔐 2FA (${totpDetails.candidates?.length ?? 2})`;
         chip.title = 'Найдено несколько 2FA-аккаунтов — нажмите для выбора нужной почты';
+        applyChipAppearance(false, false);
       } else if (totpDetails?.status === 'locked') {
         chip.textContent = '🔒 2FA';
         chip.title = 'Unlock 2FA in CodeSnap popup';
+        applyChipAppearance(false, false);
       }
       return;
     }
-    if (code && totpDetails?.status === 'found' && detector.detect2FA?.(document) && siteHasTotpHint()) {
-      chip.textContent = `${code} + 2FA`;
-      chip.title = `Click once to insert Email + 2FA (${totpDetails.remainingSeconds}s)`;
-    } else if (code && totpDetails?.status === 'choose' && detector.detect2FA?.(document) && siteHasTotpHint()) {
+    const cf = currentCustomField();
+    if (code && totpDetails?.status === 'found' && detector.detect2FA?.(document, { customField: cf }) && siteHasTotpHint()) {
+      const rem = totpDetails.remainingSeconds ?? 30;
+      chip.textContent = rem <= 3 ? `⏳ ${code} + 2FA` : `${code} + 2FA`;
+      chip.title = rem <= 3
+        ? `Осталось ${rem}с до смены 2FA — при клике вставим Почту + свежий 2FA`
+        : `Click once to insert Email + 2FA (${rem}s)`;
+      applyChipAppearance(false, rem <= 3);
+    } else if (code && totpDetails?.status === 'choose' && detector.detect2FA?.(document, { customField: cf }) && siteHasTotpHint()) {
       chip.textContent = `${code} · 2FA?`;
       chip.title = 'Нажмите, чтобы выбрать 2FA-аккаунт (несколько аккаунтов для сайта)';
+      applyChipAppearance(false, false);
     } else if (code) {
       chip.textContent = code;
       const remSec = codeDetails?.timestamp
         ? Math.max(0, Math.ceil((codeDetails.timestamp + (codeDetails.lifetimeSeconds ?? 180) * 1000 - Date.now()) / 1000))
         : null;
       chip.title = remSec !== null ? `Click once to insert (${formatMMSS(remSec)})` : 'Click once to insert';
+      applyChipAppearance(false, false);
     } else if (link) {
       chip.textContent = '🔗 Open';
       chip.title = `Open link: ${link.host}`;
+      applyChipAppearance(false, false);
+    } else {
+      applyChipAppearance(false, false);
     }
   }
 
@@ -355,6 +408,10 @@
   async function insertTotpInline(expectedFieldId, totpId = null) {
     if (fieldId !== expectedFieldId || reloadRequired) return;
     if (totpId) selectedTotpId = totpId;
+    if ((totpDetails?.remainingSeconds ?? 30) <= 3 && chip) {
+      chip.textContent = '⏳ Новый код…';
+      chip.title = 'Ждём свежий 30-секундный код 2FA…';
+    }
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'INSERT_TOTP_INLINE',
@@ -364,24 +421,35 @@
         totpId
       });
       if (fieldId !== expectedFieldId) return;
+      if (res?.status === 'phishing_blocked') {
+        showPanel('⚠️ Блокировка фишинга', res.message ?? 'Домен выглядит как фишинговый клон.');
+        return;
+      }
       if (res?.status === 'choose' && res.candidates?.length) {
         totpDetails = { ...res };
         updateChipDisplay();
         showCodePanel();
         return;
       }
+      if (res?.code) {
+        totpDetails = { ...(totpDetails ?? {}), code: res.code, remainingSeconds: res.remainingSeconds ?? totpDetails?.remainingSeconds, counter: res.counter ?? totpDetails?.counter };
+      }
       if (res?.status === 'inserted') {
         completedFieldId = fieldId;
         stopTotpTimer();
         closePanel();
-        if (chip) { chip.textContent = '✓'; chip.title = '2FA code inserted'; }
-      } else if (totpDetails?.code || totpId) {
-        const chosenCode = totpId ? totpDetails?.candidates?.find(c => c.id === totpId)?.code : totpDetails?.code;
+        if (chip) {
+          chip.textContent = '✓';
+          chip.title = res.waitedForNextWindow ? 'Свежий 2FA-код вставлен' : '2FA code inserted';
+          applyChipAppearance(false, false);
+        }
+      } else {
+        const chosenCode = res?.code || (totpId ? totpDetails?.candidates?.find(c => c.id === totpId)?.code : totpDetails?.code);
         if (chosenCode) {
           try {
             await navigator.clipboard.writeText(chosenCode);
             chrome.runtime.sendMessage({ type: 'CLIPBOARD_COPIED' }).catch(() => {});
-            if (chip) { chip.textContent = 'Copied'; chip.title = '2FA code copied.'; }
+            if (chip) { chip.textContent = 'Copied'; chip.title = '2FA code copied.'; applyChipAppearance(false, false); }
           } catch {
             if (chip) { chip.textContent = 'Retry'; chip.title = res?.message ?? 'Could not insert 2FA code'; }
           }
@@ -395,6 +463,10 @@
   async function insertDualInline(expectedFieldId, totpId = null) {
     if (fieldId !== expectedFieldId || reloadRequired || !sessionId) return;
     if (totpId) selectedTotpId = totpId;
+    if ((totpDetails?.remainingSeconds ?? 30) <= 3 && chip) {
+      chip.textContent = '⏳ Новый код…';
+      chip.title = 'Ждём свежий 30-секундный код 2FA…';
+    }
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'INSERT_DUAL_INLINE',
@@ -404,6 +476,10 @@
         totpId
       });
       if (fieldId !== expectedFieldId) return;
+      if (res?.status === 'phishing_blocked') {
+        showPanel('⚠️ Блокировка фишинга', res.message ?? 'Домен выглядит как фишинговый клон.');
+        return;
+      }
       if (res?.status === 'choose_totp' && res.candidates?.length) {
         totpDetails = { status: 'choose', count: res.candidates.length, candidates: res.candidates, period: res.candidates[0]?.period ?? 30, counter: res.candidates[0]?.counter };
         updateChipDisplay();
@@ -415,7 +491,7 @@
         code = null; link = null; sessionId = null; review = null; choices = null; codeDetails = null;
         stopChipExpiryTimer(); stopTotpTimer();
         closePanel();
-        if (chip) { chip.textContent = '✓✓'; chip.title = t('dualInserted', 'Both Email and 2FA codes inserted.'); }
+        if (chip) { chip.textContent = '✓✓'; chip.title = t('dualInserted', 'Both Email and 2FA codes inserted.'); applyChipAppearance(false, false); }
         showToast(t('dualInserted', 'Both Email and 2FA codes inserted.'));
       } else {
         showPanel(t('inlineFailed', 'Could not insert'), res?.message ?? 'Try inserting each code separately.');
@@ -856,11 +932,7 @@
   function position() {
     if (!chip || !field?.anchor?.isConnected) return;
     const rect = resolveVisibleAnchorRect(field.anchor);
-    const dark = isDarkTheme();
-    chip.style.background = dark ? 'rgba(21,28,48,.92)' : 'rgba(255,255,255,.88)';
-    chip.style.color = dark ? '#e8ebff' : '#3449be';
-    chip.style.borderColor = dark ? 'rgba(99,122,230,.5)' : 'rgba(113,130,181,.35)';
-    chip.style.boxShadow = dark ? '0 4px 18px rgba(0,0,0,.6)' : '0 4px 18px #14245536';
+    applyChipAppearance(Boolean(phishingAlert?.suspicious), !phishingAlert?.suspicious && field?.channel === 'authenticator' && totpDetails?.status === 'found' && (totpDetails.remainingSeconds ?? 30) <= 3);
     const rightControl = [...(field.anchor.parentElement?.querySelectorAll('button,[role="button"]') ?? [])].some(control => {
       if (control === chip) return false;
       const controlRect = control.getBoundingClientRect();
@@ -896,8 +968,14 @@
       chip?.remove(); chip = null; clearPadding();
       return;
     }
-    const allow2faHere = siteHasTotpHint();
-    const found = detector.detect(document, { allow2fa: allow2faHere }) ?? detector.detectLinkPrompt?.(document) ?? null;
+    const cf = currentCustomField();
+    const allow2faHere = siteHasTotpHint() || cf?.channel === 'authenticator';
+    const extraDomains = totpSiteHints.flatMap(h => [h.domain, ...(h.matchDomains ?? [])]).filter(Boolean);
+    phishingAlert = detector.checkPhishing?.(location.origin, extraDomains, phishingTrustedOrigins) ?? { suspicious: false };
+    let found = detector.detect(document, { allow2fa: allow2faHere, customField: cf }) ?? detector.detectLinkPrompt?.(document) ?? null;
+    if (!found && phishingAlert?.suspicious) {
+      found = detector.detect(document, { allow2fa: true, customField: cf }) ?? null;
+    }
     if (!found) {
       watchGeneration++; searching = false;
       stopTotpTimer(); stopChipExpiryTimer();
@@ -916,7 +994,7 @@
       code = null; link = null; webmailHint = null; sessionId = null;
       if (chip) { chip.textContent = '⚡'; chip.title = 'Click to find code'; }
     } else field = found;
-    if ((field.channel === 'authenticator' && !allow2faHere) || field.channel === 'sms') {
+    if (!phishingAlert?.suspicious && ((field.channel === 'authenticator' && !allow2faHere) || field.channel === 'sms')) {
       stopTotpTimer();
       closePanel(); review = null;
       chip?.remove(); chip = null; clearPadding();
@@ -933,6 +1011,20 @@
         if (!event.isTrusted) return;
         event.preventDefault(); event.stopPropagation();
         if (reloadRequired) { location.reload(); return; }
+        if (phishingAlert?.suspicious) {
+          showPanel('⚠️ Похоже на фишинг!', `Домен ${phishingAlert.hostname} подозрительно похож на ${phishingAlert.targetDomain}. Ввод кодов и 2FA заблокирован для вашей защиты.`, {
+            label: 'Я проверил сайт — разблокировать',
+            run: async clickEvent => {
+              if (!clickEvent.isTrusted) return;
+              await chrome.runtime.sendMessage({ type: 'TRUST_PHISHING_ORIGIN', origin: location.origin }).catch(() => {});
+              phishingTrustedOrigins = [...new Set([...phishingTrustedOrigins, location.origin])];
+              phishingAlert = { suspicious: false };
+              closePanel();
+              paint();
+            }
+          });
+          return;
+        }
         const currentFieldId = fieldId;
         if (choices || (detailedPopup && (codeDetails || review || totpDetails?.status === 'found' || totpDetails?.status === 'choose'))) { showCodePanel(); return; }
         if (review) { showReview(); return; }
@@ -1003,7 +1095,9 @@
       document.documentElement.append(chip);
     }
     position();
+    updateChipDisplay();
     if (reloadRequired) { chip.textContent = 'Reload'; chip.title = reloadMessage; return; }
+    if (phishingAlert?.suspicious) { return; }
     if (field.channel === 'authenticator' && allow2faHere && !totpDetails && !totpFetching && completedFieldId !== fieldId) {
       void refreshInlineTotp(fieldId);
       return;
@@ -1211,10 +1305,11 @@
     }
     if (request.type === 'FIELD_STATUS') {
       paint();
-      const rawEmail = detector.detect(document, { allow2fa: false });
-      const raw2fa = detector.detect2FA?.(document) ?? null;
+      const cf = currentCustomField();
+      const rawEmail = detector.detect(document, { allow2fa: false, customField: cf });
+      const raw2fa = detector.detect2FA?.(document, { customField: cf }) ?? null;
       const isDualField = Boolean(rawEmail && (rawEmail.channel === 'email' || rawEmail.channel === 'unknown') && raw2fa && raw2fa.channel === 'authenticator');
-      const statusField = field ?? (isOriginMuted() ? (detector.detect(document, { allow2fa: siteHasTotpHint() }) ?? detector.detectLinkPrompt?.(document) ?? null) : null);
+      const statusField = field ?? (isOriginMuted() ? (detector.detect(document, { allow2fa: siteHasTotpHint(), customField: cf }) ?? detector.detectLinkPrompt?.(document) ?? null) : null);
       respond({
         origin: location.origin,
         muted: isOriginMuted(),
@@ -1229,8 +1324,20 @@
         providerHint: statusField?.providerHint ?? null,
         confidence: statusField?.confidence ?? null,
         has2faField: Boolean(raw2fa),
-        isDualField
+        isDualField,
+        hasCustomField: Boolean(cf),
+        phishingAlert
       });
+      return;
+    }
+    if (request.type === 'BEGIN_QR_SNIPER') {
+      startQrSniper();
+      respond?.({ status: 'started' });
+      return;
+    }
+    if (request.type === 'BEGIN_FIELD_PICKER') {
+      startFieldPicker(request.defaultChannel || 'email');
+      respond?.({ status: 'started' });
       return;
     }
     if (request.type === 'SHOW_INLINE_TOAST') {
@@ -1249,14 +1356,15 @@
     }
     if (request.type === 'INSERT_TOTP') {
       if (request.origin && request.origin !== location.origin) { respond({ status: 'changed' }); return; }
-      const target2fa = detector.detect2FA?.(document) ?? detector.detect(document, { allow2fa: true });
+      const cf = currentCustomField();
+      const target2fa = detector.detect2FA?.(document, { customField: cf }) ?? detector.detect(document, { allow2fa: true, customField: cf });
       if (!target2fa) { respond({ status: 'missing', message: '2FA field not found.' }); return; }
       void detector.insert(target2fa, request.code).then(inserted => {
         if (inserted) {
           completedFieldId = fieldId;
           stopTotpTimer();
           closePanel();
-          if (chip) { chip.textContent = '✓'; chip.title = '2FA code inserted'; }
+          if (chip) { chip.textContent = '✓'; chip.title = '2FA code inserted'; applyChipAppearance(false, false); }
         }
         respond(inserted ? { status: 'inserted' } : { status: 'missing', message: 'The website did not retain the 2FA code.' });
       }).catch(() => respond({ status: 'missing', message: 'The website rejected 2FA insertion.' }));
@@ -1267,7 +1375,7 @@
         respond({ status: 'changed', message: 'Verification field changed. Search again.' });
         return;
       }
-      const all = detector.detectAll(document, { allow2fa: true });
+      const all = detector.detectAll(document, { allow2fa: true, customField: currentCustomField() });
       const emailTarget = all.find(c => c.channel === 'email' || c.channel === 'unknown') ?? null;
       const totpTarget = all.find(c => c.channel === 'authenticator') ?? null;
       (async () => {
@@ -1277,7 +1385,7 @@
           completedFieldId = fieldId;
           code = null; link = null; sessionId = null; review = null; codeDetails = null; choices = null;
           stopChipExpiryTimer(); stopTotpTimer(); closePanel();
-          if (chip) { chip.textContent = '✓✓'; chip.title = t('dualInserted', 'Both Email and 2FA codes inserted.'); }
+          if (chip) { chip.textContent = '✓✓'; chip.title = t('dualInserted', 'Both Email and 2FA codes inserted.'); applyChipAppearance(false, false); }
           respond({ status: 'inserted_dual' });
         } else if (emailOk) {
           respond({ status: 'inserted_email_only', message: 'Email code inserted, but 2FA field failed.' });
@@ -1294,7 +1402,7 @@
       respond({ status: 'changed', message: 'Verification field changed. Search again.' });
       return;
     }
-    const latest = detector.detect(document, { allow2fa: siteHasTotpHint() });
+    const latest = detector.detect(document, { allow2fa: siteHasTotpHint() || currentCustomField()?.channel === 'authenticator', customField: currentCustomField() });
     if (!sameField(field, latest)) {
       paint();
       respond({ status: 'changed', message: 'Verification field changed. Search again.' });
@@ -1314,9 +1422,9 @@
   const observer = new MutationObserver(records => {
     const relevant = records.some(record => {
       const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-      if (target === chip || target?.closest?.('#codesnap-inline-panel') || target?.getRootNode?.().host?.id === 'codesnap-inline-panel' || target?.id === 'codesnap-toast') return false;
+      if (target === chip || target?.closest?.('#codesnap-inline-panel,#codesnap-sniper-overlay,#codesnap-picker-bar,#codesnap-picker-highlight') || target?.getRootNode?.().host?.id === 'codesnap-inline-panel' || target?.getRootNode?.().host?.id === 'codesnap-sniper-overlay' || target?.getRootNode?.().host?.id === 'codesnap-picker-bar' || target?.id === 'codesnap-toast') return false;
       return record.type === 'attributes' || record.type === 'characterData' || [...record.addedNodes, ...record.removedNodes].some(node =>
-        node.nodeType === 1 && node.id !== 'codesnap-inline-panel' && node.id !== 'codesnap-toast' && (node.matches?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="verify" i],[class*="confirm" i],[class*="auth" i],[class*="otp" i],[class*="code" i],[class*="modal" i]') || node.querySelector?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="auth" i],[class*="otp" i],[class*="code" i]') || node.shadowRoot));
+        node.nodeType === 1 && !/^(?:codesnap-inline-panel|codesnap-toast|codesnap-sniper-overlay|codesnap-picker-bar|codesnap-picker-highlight)$/.test(node.id) && (node.matches?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="verify" i],[class*="confirm" i],[class*="auth" i],[class*="otp" i],[class*="code" i],[class*="modal" i]') || node.querySelector?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="auth" i],[class*="otp" i],[class*="code" i]') || node.shadowRoot));
     });
     if (!relevant) return;
     clearTimeout(debounceTimer);
@@ -1378,13 +1486,229 @@
   addEventListener('resize', position);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') closePanel(); });
   document.addEventListener('pointerdown', event => { if (panel && !event.composedPath().includes(panel) && event.target !== chip) closePanel(); }, true);
-  chrome.storage.local.get(['autoWatch', 'detailedPopup', 'totpEnabled', 'totpSiteHints', 'mutedOrigins']).then(settings => {
+  function collectVisualsInRect(selRect) {
+    const urls = [];
+    const overlaps = el => {
+      const r = el.getBoundingClientRect?.();
+      if (!r || r.width < 12 || r.height < 12) return false;
+      return !(r.right < selRect.x || r.left > selRect.x + selRect.width || r.bottom < selRect.y || r.top > selRect.y + selRect.height);
+    };
+    for (const root of detector.roots(document)) {
+      for (const svg of root.querySelectorAll?.('svg') ?? []) {
+        if (!overlaps(svg)) continue;
+        try {
+          const cloned = svg.cloneNode(true);
+          if (!cloned.getAttribute('xmlns')) cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+          urls.push(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(cloned.outerHTML)}`);
+        } catch { /* ignore */ }
+      }
+      for (const canvas of root.querySelectorAll?.('canvas') ?? []) {
+        if (!overlaps(canvas)) continue;
+        try { const u = canvas.toDataURL('image/png'); if (u.startsWith('data:image/')) urls.push(u); } catch { /* tainted */ }
+      }
+      for (const img of root.querySelectorAll?.('img') ?? []) {
+        if (!overlaps(img)) continue;
+        if (img.src?.startsWith('data:image/')) urls.push(img.src);
+      }
+    }
+    return urls.slice(0, 6);
+  }
+
+  function closeSniper() {
+    sniperHost?.cleanup?.();
+    sniperHost?.remove();
+    sniperHost = null;
+  }
+
+  function startQrSniper() {
+    closePicker();
+    closeSniper();
+    if (!document.documentElement) return;
+    const host = document.createElement('div');
+    host.id = 'codesnap-sniper-overlay';
+    host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(15,23,42,.28);user-select:none';
+    const root = host.attachShadow({ mode: 'open' });
+    const bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:999px;background:#0f172a;color:#f8fafc;border:1px solid #475569;box-shadow:0 8px 24px rgba(0,0,0,.45);font:650 13px/1.3 system-ui,sans-serif;cursor:default';
+    const msg = document.createElement('span');
+    msg.textContent = '🎯 Выделите мышкой QR-код 2FA · Esc — отмена';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = '×';
+    cancelBtn.setAttribute('aria-label', 'Отмена');
+    cancelBtn.style.cssText = 'border:0;background:none;color:#cbd5e1;font-size:18px;cursor:pointer;line-height:1';
+    bar.append(msg, cancelBtn);
+
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;border:2px solid #60a5fa;background:rgba(59,130,246,.18);box-shadow:0 0 0 9999px rgba(15,23,42,.38);display:none;pointer-events:none;border-radius:6px';
+    root.append(box, bar);
+    document.documentElement.append(host);
+
+    let start = null;
+    const onPointerDown = e => {
+      if (e.composedPath().includes(bar)) return;
+      e.preventDefault();
+      start = { x: e.clientX, y: e.clientY };
+      box.style.display = 'block';
+      box.style.left = `${start.x}px`;
+      box.style.top = `${start.y}px`;
+      box.style.width = '0px';
+      box.style.height = '0px';
+    };
+    const onPointerMove = e => {
+      if (!start) return;
+      const x = Math.min(start.x, e.clientX);
+      const y = Math.min(start.y, e.clientY);
+      const w = Math.abs(e.clientX - start.x);
+      const h = Math.abs(e.clientY - start.y);
+      box.style.left = `${x}px`;
+      box.style.top = `${y}px`;
+      box.style.width = `${w}px`;
+      box.style.height = `${h}px`;
+    };
+    const onPointerUp = async e => {
+      if (!start) return;
+      const rect = {
+        x: Math.min(start.x, e.clientX),
+        y: Math.min(start.y, e.clientY),
+        width: Math.abs(e.clientX - start.x),
+        height: Math.abs(e.clientY - start.y),
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight
+      };
+      start = null;
+      if (rect.width < 16 || rect.height < 16) {
+        box.style.display = 'none';
+        msg.textContent = 'Протяните рамку вокруг QR-кода · Esc — отмена';
+        return;
+      }
+      const regionVisualUrls = collectVisualsInRect(rect);
+      closeSniper();
+      await new Promise(r => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => setTimeout(r, 40)) : setTimeout(r, 40)));
+      await chrome.runtime.sendMessage({
+        type: 'FINISH_QR_SNIPER',
+        origin: location.origin,
+        rect,
+        regionVisualUrls
+      }).catch(() => {});
+    };
+    const onKeyDown = e => { if (e.key === 'Escape') closeSniper(); };
+    cancelBtn.addEventListener('click', closeSniper);
+    host.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointerup', onPointerUp, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    host.cleanup = () => {
+      document.removeEventListener('pointermove', onPointerMove, true);
+      document.removeEventListener('pointerup', onPointerUp, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+    sniperHost = host;
+  }
+
+  function closePicker() {
+    pickerState?.cleanup?.();
+    pickerState?.bar?.remove();
+    pickerState?.highlight?.remove();
+    pickerState = null;
+  }
+
+  function startFieldPicker(defaultChannel = 'email') {
+    closeSniper();
+    closePicker();
+    if (!document.documentElement) return;
+    let chosenChannel = defaultChannel === 'authenticator' ? 'authenticator' : 'email';
+
+    const highlight = document.createElement('div');
+    highlight.id = 'codesnap-picker-highlight';
+    highlight.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;border:2px dashed #4f46e5;background:rgba(79,70,229,.12);border-radius:8px;display:none';
+
+    const bar = document.createElement('div');
+    bar.id = 'codesnap-picker-bar';
+    const barRoot = bar.attachShadow({ mode: 'open' });
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:2147483647;display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:999px;background:#0f172a;color:#f8fafc;border:1px solid #475569;box-shadow:0 8px 24px rgba(0,0,0,.45);font:650 12px/1.3 system-ui,sans-serif';
+    const label = document.createElement('span');
+    label.textContent = '📍 Кликните по полю кода:';
+    const mailMode = document.createElement('button');
+    mailMode.type = 'button';
+    mailMode.textContent = '✉ Почта';
+    const twofaMode = document.createElement('button');
+    twofaMode.type = 'button';
+    twofaMode.textContent = '🔐 2FA';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = '×';
+    cancelBtn.setAttribute('aria-label', 'Отмена');
+    cancelBtn.style.cssText = 'border:0;background:none;color:#cbd5e1;font-size:18px;cursor:pointer;line-height:1;margin-left:4px';
+
+    const syncModeButtons = () => {
+      const base = 'padding:4px 9px;border-radius:999px;border:1px solid #475569;font:700 11px system-ui;cursor:pointer;';
+      mailMode.style.cssText = base + (chosenChannel === 'email' ? 'background:#4f46e5;color:#fff;border-color:#6366f1' : 'background:#1e293b;color:#cbd5e1');
+      twofaMode.style.cssText = base + (chosenChannel === 'authenticator' ? 'background:#4f46e5;color:#fff;border-color:#6366f1' : 'background:#1e293b;color:#cbd5e1');
+    };
+    syncModeButtons();
+    mailMode.addEventListener('click', () => { chosenChannel = 'email'; syncModeButtons(); });
+    twofaMode.addEventListener('click', () => { chosenChannel = 'authenticator'; syncModeButtons(); });
+    cancelBtn.addEventListener('click', closePicker);
+
+    wrap.append(label, mailMode, twofaMode, cancelBtn);
+    barRoot.append(wrap);
+    document.documentElement.append(highlight, bar);
+
+    const onMove = e => {
+      if (e.composedPath().includes(bar)) { highlight.style.display = 'none'; return; }
+      const el = e.target;
+      if (!el || typeof el.getBoundingClientRect !== 'function') return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return;
+      highlight.style.display = 'block';
+      highlight.style.left = `${Math.max(0, r.left - 3)}px`;
+      highlight.style.top = `${Math.max(0, r.top - 3)}px`;
+      highlight.style.width = `${r.width + 6}px`;
+      highlight.style.height = `${r.height + 6}px`;
+    };
+    const onClick = async e => {
+      if (e.composedPath().includes(bar)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const target = e.target;
+      const desc = detector.buildCustomFieldDescriptor?.(target, chosenChannel);
+      closePicker();
+      if (!desc) {
+        showToast('Не удалось определить поле — нажмите прямо внутрь поля или ячейки');
+        return;
+      }
+      const next = { ...(customFieldSelectors ?? {}), [location.origin]: { ...desc, updatedAt: Date.now() } };
+      customFieldSelectors = next;
+      await chrome.storage.local.set({ customFieldSelectors: next }).catch(() => {});
+      showToast(`Поле запомнено для ${location.hostname}`);
+      paint();
+    };
+    const onKey = e => { if (e.key === 'Escape') closePicker(); };
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKey, true);
+    pickerState = {
+      bar,
+      highlight,
+      cleanup: () => {
+        document.removeEventListener('pointermove', onMove, true);
+        document.removeEventListener('click', onClick, true);
+        document.removeEventListener('keydown', onKey, true);
+      }
+    };
+  }
+
+  chrome.storage.local.get(['autoWatch', 'detailedPopup', 'totpEnabled', 'totpSiteHints', 'mutedOrigins', 'phishingTrustedOrigins', 'customFieldSelectors']).then(settings => {
     detailedPopup = settings.detailedPopup === true;
     totpEnabled = settings.totpEnabled === true;
     totpSiteHints = Array.isArray(settings.totpSiteHints) ? settings.totpSiteHints : [];
     mutedOrigins = Array.isArray(settings.mutedOrigins) ? settings.mutedOrigins : [];
+    phishingTrustedOrigins = Array.isArray(settings.phishingTrustedOrigins) ? settings.phishingTrustedOrigins : [];
+    customFieldSelectors = settings.customFieldSelectors && typeof settings.customFieldSelectors === 'object' ? settings.customFieldSelectors : {};
     autoWatch = settings.autoWatch !== false;
-    if (autoWatch || siteHasTotpHint()) paint();
+    if (autoWatch || siteHasTotpHint() || currentCustomField()) paint();
   }).catch(error => {
     if (contextInvalidated(error)) showReloadRequired();
   });
@@ -1400,6 +1724,14 @@
     }
     if (area === 'local' && changes.mutedOrigins) {
       mutedOrigins = Array.isArray(changes.mutedOrigins.newValue) ? changes.mutedOrigins.newValue : [];
+      paint();
+    }
+    if (area === 'local' && changes.phishingTrustedOrigins) {
+      phishingTrustedOrigins = Array.isArray(changes.phishingTrustedOrigins.newValue) ? changes.phishingTrustedOrigins.newValue : [];
+      paint();
+    }
+    if (area === 'local' && changes.customFieldSelectors) {
+      customFieldSelectors = changes.customFieldSelectors.newValue && typeof changes.customFieldSelectors.newValue === 'object' ? changes.customFieldSelectors.newValue : {};
       paint();
     }
     if (area === 'local' && changes.localWebmailEnabled) {

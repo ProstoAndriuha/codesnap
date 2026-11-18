@@ -207,3 +207,117 @@ export async function scanTabForTotp(tab, fallbackMeta = {}) {
     message: 'На открытой странице не найден QR-код 2FA или текстовый секретный ключ.'
   };
 }
+
+export function decodeRawRgbaCrop(rgba, imgWidth, imgHeight, cropRect = null) {
+  const results = new Set();
+  if (!rgba || imgWidth < 8 || imgHeight < 8) return [];
+
+  let sx = 0;
+  let sy = 0;
+  let sw = imgWidth;
+  let sh = imgHeight;
+  if (cropRect && Number(cropRect.width) > 4 && Number(cropRect.height) > 4) {
+    const scaleX = imgWidth / (Number(cropRect.viewportWidth) || imgWidth);
+    const scaleY = imgHeight / (Number(cropRect.viewportHeight) || imgHeight);
+    sx = Math.max(0, Math.floor(Number(cropRect.x) * scaleX) - 8);
+    sy = Math.max(0, Math.floor(Number(cropRect.y) * scaleY) - 8);
+    sw = Math.min(imgWidth - sx, Math.ceil(Number(cropRect.width) * scaleX) + 16);
+    sh = Math.min(imgHeight - sy, Math.ceil(Number(cropRect.height) * scaleY) + 16);
+  }
+  if (sw < 12 || sh < 12) return [];
+
+  const pad = 24;
+  const scales = Math.max(sw, sh) < 280 ? [1, 2] : [1];
+  for (const scale of scales) {
+    const dw = sw * scale;
+    const dh = sh * scale;
+    const outW = dw + pad * 2;
+    const outH = dh + pad * 2;
+    const buf = new Uint8ClampedArray(outW * outH * 4);
+    for (const bg of [[255, 255, 255, 255], [15, 23, 42, 255]]) {
+      for (let i = 0; i < buf.length; i += 4) {
+        buf[i] = bg[0];
+        buf[i + 1] = bg[1];
+        buf[i + 2] = bg[2];
+        buf[i + 3] = bg[3];
+      }
+      for (let y = 0; y < dh; y++) {
+        const srcY = sy + Math.floor(y / scale);
+        const dstRow = (y + pad) * outW;
+        const srcRow = srcY * imgWidth;
+        for (let x = 0; x < dw; x++) {
+          const srcIdx = (srcRow + sx + Math.floor(x / scale)) * 4;
+          const dstIdx = (dstRow + x + pad) * 4;
+          buf[dstIdx] = rgba[srcIdx];
+          buf[dstIdx + 1] = rgba[srcIdx + 1];
+          buf[dstIdx + 2] = rgba[srcIdx + 2];
+          buf[dstIdx + 3] = rgba[srcIdx + 3];
+        }
+      }
+      const hit = decodeQrRgba(buf, outW, outH);
+      if (hit) results.add(hit);
+    }
+    if (results.size > 0) break;
+  }
+  return [...results];
+}
+
+export async function decodeCroppedQrDataUrl(dataUrl, cropRect = null) {
+  if (!dataUrl) return [];
+  try {
+    if (typeof document !== 'undefined') {
+      const img = await loadImage(dataUrl);
+      const nw = img.naturalWidth || img.width || 0;
+      const nh = img.naturalHeight || img.height || 0;
+      if (!nw || !nh) return [];
+      const canvas = document.createElement('canvas');
+      canvas.width = nw;
+      canvas.height = nh;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return [];
+      ctx.drawImage(img, 0, 0, nw, nh);
+      const imgData = ctx.getImageData(0, 0, nw, nh);
+      return decodeRawRgbaCrop(imgData.data, nw, nh, cropRect);
+    }
+    if (typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function') {
+      const resp = await fetch(dataUrl);
+      const blob = await resp.blob();
+      const bitmap = await createImageBitmap(blob);
+      const nw = bitmap.width || 0;
+      const nh = bitmap.height || 0;
+      if (!nw || !nh) { bitmap.close?.(); return []; }
+      const canvas = new OffscreenCanvas(nw, nh);
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) { bitmap.close?.(); return []; }
+      ctx.drawImage(bitmap, 0, 0, nw, nh);
+      const imgData = ctx.getImageData(0, 0, nw, nh);
+      bitmap.close?.();
+      const hits = decodeRawRgbaCrop(imgData.data, nw, nh, cropRect);
+      if (hits.length) return hits;
+      if (typeof globalThis.BarcodeDetector === 'function') {
+        const bd = new globalThis.BarcodeDetector({ formats: ['qr_code'] });
+        const detected = await bd.detect(canvas).catch(() => []);
+        return (detected ?? []).map(d => String(d?.rawValue ?? '').trim()).filter(Boolean);
+      }
+    }
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+export function classifyQrStringsForTotp(rawList, fallbackMeta = {}) {
+  const nonTotpPreviews = [];
+  const { found } = classifyDecodedList(Array.isArray(rawList) ? rawList : [], fallbackMeta, nonTotpPreviews);
+  if (found?.length) return { status: 'found', entries: found };
+  if (nonTotpPreviews.length) {
+    return {
+      status: 'error',
+      message: `QR-код прочитан (${nonTotpPreviews[0]}), но это обычная ссылка, а не секрет 2FA (otpauth://).`
+    };
+  }
+  return {
+    status: 'error',
+    message: 'В выделенной области QR-код 2FA не найден. Попробуйте выделить чуть шире (с белыми краями).'
+  };
+}

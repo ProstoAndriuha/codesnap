@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.1.1</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.2.0</span></div>
     <p data-i18n="tagline">Your email codes &amp; activation links, 100% locally.</p>
   </header>
 
@@ -22,6 +22,10 @@
     <div id="authModeView" hidden></div>
 
     <div id="mailModeView">
+    <div class="phishing-banner" id="phishingBanner" hidden>
+      <div id="phishingBannerText"></div>
+      <button class="text-button danger" id="phishingTrustBtn" type="button">Доверять сайту</button>
+    </div>
     <section class="card site-card" aria-labelledby="site">
       <div class="section-top"><span class="eyebrow" data-i18n="currentWebsite">CURRENT WEBSITE</span><span class="badge" id="fieldBadge" data-i18n="badgeChecking">Checking</span></div>
       <h1 id="site" data-i18n="checkingPage">Checking the page…</h1>
@@ -30,6 +34,8 @@
       <div id="dualFillWrap" hidden><button class="dual-fill-button" id="dualFillBtn" type="button" data-i18n="dualFillAction">⚡ Insert both codes (Email + 2FA)</button></div>
       <button class="quiet-search" id="search" type="button" data-i18n="checkAgain" hidden>↻ Check again</button>
       <div class="site-actions-row">
+        <button class="text-button" id="pickFieldBtn" type="button">🎯 Указать поле</button>
+        <button class="text-button" id="clearPickedFieldBtn" type="button" hidden>× Сбросить поле</button>
         <button class="text-button" id="toggleMuteSite" type="button" hidden></button>
         <span class="hotkey-hint" id="hotkeyHint" title="Быстрая вставка кода">Alt+Shift+V</span>
       </div>
@@ -54,6 +60,7 @@
       </form>
       <div id="totpManagePanel" class="mail-form" hidden>
         <button class="secondary full-btn" id="totpScanBtn" type="button" data-i18n="totpScanPage">📷 Scan QR / key on page</button>
+        <button class="secondary full-btn" id="totpRegionScanBtn" type="button">🎯 Выделить QR областью</button>
         <form id="totpAddForm">
           <label for="totpSecretInput" data-i18n="totpInputLabel">Base32 secret or otpauth:// URI</label>
           <input id="totpSecretInput" type="password" autocomplete="off" placeholder="JBSWY3DPEHPK3PXP или otpauth://...">

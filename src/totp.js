@@ -1,4 +1,24 @@
-import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity, matchesMaskedEmail } from './core.js';
+import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity, matchesMaskedEmail, checkPhishingRisk } from './core.js';
+
+export const TOTP_GRACE_SECONDS = 3;
+
+export async function awaitFreshTotpResult(getterFn, {
+  graceSeconds = TOTP_GRACE_SECONDS,
+  sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  nowFn = () => Date.now()
+} = {}) {
+  const now = nowFn();
+  const first = await getterFn(now);
+  if (!first || first.status !== 'found') return first;
+  const periodMs = (first.period || 30) * 1000;
+  const remMs = periodMs - (((now % periodMs) + periodMs) % periodMs);
+  if (first.remainingSeconds > graceSeconds && remMs > graceSeconds * 1000) {
+    return { ...first, waitedForNextWindow: false };
+  }
+  await sleepFn(Math.min(graceSeconds * 1000 + 250, remMs + 60));
+  const fresh = await getterFn(nowFn());
+  return { ...fresh, waitedForNextWindow: true };
+}
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const PBKDF2_ITERATIONS = 150_000;
@@ -686,6 +706,8 @@ export async function refreshTotpSiteHints() {
 
 export function matchAllTotpHintsForSite(hints, origin, siteContext = {}) {
   if (!Array.isArray(hints) || !hints.length || !origin?.startsWith('https://')) return [];
+  const extraDomains = hints.flatMap(h => [h.domain, ...(h.matchDomains ?? [])]).filter(Boolean);
+  if (checkPhishingRisk(origin, extraDomains, siteContext.phishingTrustedOrigins ?? []).suspicious) return [];
   const identity = siteIdentity(origin, siteContext);
   if (!identity.hostname) return [];
   const hostCore = rootDomainOf(identity.hostname).split('.')[0];
@@ -748,9 +770,13 @@ function scoreCandidateAccountMatch(entry, hint, siteContext = {}) {
 }
 
 export async function getTotpCandidatesForSite(origin, siteContext = {}, now = Date.now()) {
-  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  const { totpVault = null, totpSiteHints = [], phishingTrustedOrigins = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'phishingTrustedOrigins']);
   const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
-  const matched = matchAllTotpHintsForSite(hints, origin, siteContext);
+  const mergedCtx = {
+    ...siteContext,
+    phishingTrustedOrigins: Array.isArray(siteContext.phishingTrustedOrigins) ? siteContext.phishingTrustedOrigins : phishingTrustedOrigins
+  };
+  const matched = matchAllTotpHintsForSite(hints, origin, mergedCtx);
   if (!matched.length || !totpVault) return { status: 'none', candidates: [] };
 
   let entries;
@@ -807,7 +833,7 @@ export async function getTotpForSite(origin, siteContext = {}, now = Date.now())
 }
 
 export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date.now()) {
-  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  const { totpVault = null, totpSiteHints = [], phishingTrustedOrigins = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'phishingTrustedOrigins']);
   const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
   const pinProtected = totpVault?.mode === 'pin';
   let entries;
@@ -821,7 +847,11 @@ export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date
     return { status: 'ok', pinProtected: false, count: 0, items: [] };
   }
 
-  const matchedMap = new Map(matchAllTotpHintsForSite(hints, origin, siteContext).map(m => [m.hint.id, m.siteScore]));
+  const mergedCtx = {
+    ...siteContext,
+    phishingTrustedOrigins: Array.isArray(siteContext.phishingTrustedOrigins) ? siteContext.phishingTrustedOrigins : phishingTrustedOrigins
+  };
+  const matchedMap = new Map(matchAllTotpHintsForSite(hints, origin, mergedCtx).map(m => [m.hint.id, m.siteScore]));
   const items = [];
   for (const entry of entries) {
     const hint = hints.find(h => h.id === entry.id);

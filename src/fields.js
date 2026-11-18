@@ -526,12 +526,18 @@ globalThis.VerificationFields = (() => {
   function collectAllFields(root = document, options = {}) {
     const inputs = roots(root).flatMap(part => [...part.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]')]).filter(visible);
     const candidates = [];
-    const groups = new Set();
+    const customPicked = options.customField ? resolveCustomField(root, options.customField) : null;
+    if (customPicked) candidates.push(customPicked);
+    const groups = new Set(customPicked?.inputs ?? []);
     for (const input of inputs) {
+      if (customPicked?.inputs?.includes(input)) continue;
       const group = groupFor(input);
       if (group) {
         const key = group.inputs[0];
-        if (!groups.has(key)) { groups.add(key); candidates.push(group); }
+        if (!groups.has(key) && !group.inputs.some(el => customPicked?.inputs?.includes(el))) {
+          groups.add(key);
+          candidates.push(group);
+        }
       } else if (!otpCell(input)) {
         const cls = classifyChannel(input);
         const slotsInfo = findDecorativeSlotsContainer(input);
@@ -560,7 +566,7 @@ globalThis.VerificationFields = (() => {
     }
     const modal = usable.filter(candidate => candidate.anchor.closest?.('dialog[open],[role="dialog"],[aria-modal="true"]'));
     const list = modal.length ? modal : usable;
-    list.sort((a, b) => priority[b.channel] - priority[a.channel] || b.score - a.score);
+    list.sort((a, b) => Number(Boolean(b.customPicked)) - Number(Boolean(a.customPicked)) || priority[b.channel] - priority[a.channel] || b.score - a.score);
     return list;
   }
 
@@ -576,8 +582,8 @@ globalThis.VerificationFields = (() => {
     return candidates[0];
   }
 
-  function detect2FA(root = document) {
-    return detectAll(root, { preferChannel: 'authenticator' }).find(candidate => candidate.channel === 'authenticator') ?? null;
+  function detect2FA(root = document, options = {}) {
+    return detectAll(root, { ...options, preferChannel: 'authenticator' }).find(candidate => candidate.channel === 'authenticator') ?? null;
   }
 
   function dispatchPasteEvent(target, code) {
@@ -723,5 +729,259 @@ globalThis.VerificationFields = (() => {
     return null;
   }
 
-  return { detect, detect2FA, detectAll, detectLinkPrompt, classifyChannel, insert, score, roots };
+  function cssEscapeIdent(str) {
+    const raw = String(str ?? '');
+    if (typeof globalThis.CSS?.escape === 'function') return globalThis.CSS.escape(raw);
+    return raw.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  }
+
+  function isStableId(id) {
+    return Boolean(id && !/^\d|[:.#\s]|(?:^|[-_])(?:r\d+|mui-\d+|radix-|headlessui-|el-id-)/i.test(id));
+  }
+
+  function buildUniqueSelector(el) {
+    const doc = el?.ownerDocument;
+    if (!el || el.nodeType !== 1 || !doc) return null;
+    if (isStableId(el.id)) {
+      const idSel = `#${cssEscapeIdent(el.id)}`;
+      try { if (doc.querySelectorAll(idSel).length === 1) return idSel; } catch { /* ignore */ }
+    }
+    const segs = [];
+    let cur = el;
+    for (let d = 0; cur && cur.nodeType === 1 && cur.tagName !== 'HTML' && d < 6; d++) {
+      let seg = cur.tagName.toLowerCase();
+      if (isStableId(cur.id)) {
+        const idSel = `#${cssEscapeIdent(cur.id)}`;
+        try {
+          if (doc.querySelectorAll(idSel).length === 1) {
+            segs.unshift(idSel);
+            return segs.join(' > ');
+          }
+        } catch { /* ignore */ }
+      }
+      for (const attr of ['data-testid', 'data-qa', 'name', 'autocomplete', 'inputmode', 'type']) {
+        const val = cur.getAttribute?.(attr);
+        if (val && !val.includes('"') && val.length <= 48) {
+          seg += `[${attr}="${val}"]`;
+          break;
+        }
+      }
+      if (cur.parentElement) {
+        const sameTagSibs = [...cur.parentElement.children].filter(s => s.tagName === cur.tagName);
+        if (sameTagSibs.length > 1) {
+          seg += `:nth-of-type(${sameTagSibs.indexOf(cur) + 1})`;
+        }
+      }
+      segs.unshift(seg);
+      const joined = segs.join(' > ');
+      try { if (doc.querySelectorAll(joined).length === 1) return joined; } catch { /* ignore */ }
+      if (cur.tagName === 'BODY') break;
+      cur = cur.parentElement;
+    }
+    return segs.length ? segs.join(' > ') : null;
+  }
+
+  function buildCustomFieldDescriptor(clickedEl, channel = 'email') {
+    if (!clickedEl || clickedEl.nodeType !== 1) return null;
+    let targetEl = clickedEl.closest?.('input, [contenteditable="true"], [contenteditable=""]');
+    if (targetEl && targetEl.tagName === 'INPUT' && !allowedType.test(targetEl.type || 'text')) targetEl = null;
+    if (!targetEl) {
+      const inside = clickedEl.querySelector?.('input, [contenteditable="true"], [contenteditable=""]');
+      if (inside && (inside.tagName !== 'INPUT' || allowedType.test(inside.type || 'text'))) targetEl = inside;
+    }
+    if (!targetEl) {
+      for (const holder of [clickedEl.parentElement, clickedEl.parentElement?.parentElement]) {
+        const nearby = holder?.querySelector?.('input, [contenteditable="true"], [contenteditable=""]');
+        if (nearby && (nearby.tagName !== 'INPUT' || allowedType.test(nearby.type || 'text'))) {
+          targetEl = nearby;
+          break;
+        }
+      }
+    }
+    if (!targetEl) targetEl = clickedEl.closest?.('[tabindex]') || clickedEl;
+
+    const selector = buildUniqueSelector(targetEl);
+    if (!selector) return null;
+    let groupSelector = null;
+    let anc = targetEl.parentElement;
+    for (let depth = 0; anc && depth < 3; depth++, anc = anc.parentElement) {
+      const list = [...anc.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]')].filter(el => isEditableElement(el) && elementShown(el));
+      if (list.length >= 4 && list.length <= 8 && list.includes(targetEl) && list.every(el => elementTextLen(el) <= 1)) {
+        groupSelector = buildUniqueSelector(anc);
+        break;
+      }
+    }
+    const cleanChannel = channel === 'authenticator' ? 'authenticator' : 'email';
+    return { selector, groupSelector, isGroup: Boolean(groupSelector), channel: cleanChannel };
+  }
+
+  function resolveCustomField(root = document, customField = null) {
+    if (!customField?.selector) return null;
+    const ch = customField.channel === 'authenticator' ? 'authenticator' : 'email';
+    const sub = ch === 'authenticator' ? 'totp' : 'email_otp';
+    for (const part of roots(root)) {
+      if (customField.groupSelector) {
+        try {
+          const holder = part.querySelector?.(customField.groupSelector);
+          if (holder) {
+            const groupInputs = [...holder.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]')].filter(visible);
+            if (groupInputs.length >= 4 && groupInputs.length <= 8) {
+              return {
+                type: 'group',
+                inputs: groupInputs,
+                score: 100,
+                anchor: groupInputs.at(-1),
+                context: 'Custom user-selected field group',
+                channel: ch,
+                subchannel: sub,
+                providerHint: null,
+                confidence: 'high',
+                customPicked: true,
+                expectedLength: groupInputs.length
+              };
+            }
+          }
+        } catch { /* ignore invalid selector */ }
+      }
+      try {
+        const el = part.querySelector?.(customField.selector);
+        if (el && (visible(el) || elementShown(el))) {
+          const isEdit = isEditableElement(el);
+          const slotsInfo = isEdit && el.tagName === 'INPUT' ? findDecorativeSlotsContainer(el) : null;
+          return {
+            type: isEdit ? 'single' : 'custom-otp',
+            inputs: [el],
+            slots: slotsInfo?.slots ?? null,
+            score: 100,
+            anchor: resolveAnchor(el, slotsInfo),
+            context: 'Custom user-selected field',
+            channel: ch,
+            subchannel: sub,
+            providerHint: null,
+            confidence: 'high',
+            customPicked: true,
+            expectedLength: isEdit ? (expectedCodeLength(el) ?? slotsInfo?.slots?.length ?? null) : null
+          };
+        }
+      } catch { /* ignore invalid selector */ }
+    }
+    return null;
+  }
+
+  const PROTECTED_ROOTS = [
+    'binance.com', 'bybit.com', 'okx.com', 'okex.com', 'blofin.com', 'kcex.com', 'onebullex.com',
+    'bitget.com', 'mexc.com', 'gate.io', 'kucoin.com', 'bingx.com', 'htx.com', 'huobi.com',
+    'kraken.com', 'coinbase.com', 'bitunix.com', 'phemex.com', 'lbank.com', 'xt.com', 'pionex.com',
+    'bitmart.com', 'coinex.com', 'weex.com', 'toobit.com', 'whitebit.com', 'ascendex.com',
+    'poloniex.com', 'deribit.com', 'woo.org', 'woox.io', 'czrex.com', 'github.com', 'gitlab.com',
+    'discord.com', 'paypal.com', 'stripe.com', 'openai.com', 'anthropic.com', 'google.com',
+    'apple.com', 'icloud.com', 'microsoft.com', 'live.com', 'yandex.ru', 'vk.com', 'ozon.ru',
+    'avito.ru', 'tbank.ru', 'gosuslugi.ru'
+  ];
+  const PHISH_MULTIPART = new Set(['co.uk', 'org.uk', 'com.au', 'co.jp', 'com.ua', 'com.br', 'com.tr']);
+  const PHISH_SAFE = new Set(['example', 'localhost', 'bank', 'cloud', 'stream', 'switch', 'team', 'link', 'mail', 'post', 'gate', 'live', 'meta', 'line', 'base', 'woo']);
+  const PHISH_EXCHANGE = new Set(['binance', 'bybit', 'blofin', 'okx', 'okex', 'kucoin', 'bitget', 'onebullex', 'bitunix', 'kcex', 'bingx', 'coinbase', 'kraken', 'phemex', 'deribit', 'whitebit', 'bitmart', 'toobit', 'weex', 'czrex']);
+  const PHISH_CONFUSABLE = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'l', ј: 'j', ѕ: 's', ӏ: 'l', в: 'b', к: 'k', м: 'm', н: 'h', т: 't', α: 'a', ο: 'o', ρ: 'p', ε: 'e', ν: 'v', κ: 'k', τ: 't', '0': 'o', '1': 'l', i: 'l' };
+
+  function rootDomain(host) {
+    const parts = String(host ?? '').toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
+    if (parts.length <= 2) return parts.join('.');
+    const lastTwo = parts.slice(-2).join('.');
+    return PHISH_MULTIPART.has(lastTwo) && parts.length >= 3 ? parts.slice(-3).join('.') : lastTwo;
+  }
+
+  function decodePunycode(label) {
+    const raw = String(label ?? '').toLowerCase();
+    if (!raw.startsWith('xn--')) return raw;
+    const encoded = raw.slice(4);
+    const delim = encoded.lastIndexOf('-');
+    const out = delim > 0 ? [...encoded.slice(0, delim)].map(c => c.codePointAt(0)) : [];
+    let idx = delim > 0 ? delim + 1 : 0;
+    let n = 128; let bias = 72; let i = 0;
+    const adapt = (d, num, first) => {
+      let v = (first ? Math.floor(d / 700) : Math.floor(d / 2)) + Math.floor(d / num);
+      let k = 0; while (v > 455) { v = Math.floor(v / 35); k += 36; }
+      return k + Math.floor((36 * v) / (v + 38));
+    };
+    while (idx < encoded.length) {
+      const oldi = i; let w = 1;
+      for (let k = 36; ; k += 36) {
+        if (idx >= encoded.length) return raw;
+        const c = encoded.charCodeAt(idx++);
+        const d = c >= 48 && c <= 57 ? c - 22 : c >= 97 && c <= 122 ? c - 97 : 36;
+        if (d >= 36) return raw;
+        i += d * w;
+        const t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+        if (d < t) break;
+        w *= 36 - t;
+      }
+      bias = adapt(i - oldi, out.length + 1, oldi === 0);
+      n += Math.floor(i / (out.length + 1));
+      i %= out.length + 1;
+      out.splice(i++, 0, n);
+    }
+    try { return String.fromCodePoint(...out); } catch { return raw; }
+  }
+
+  function skel(s) {
+    return String(s ?? '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/rn/g, 'm').replace(/vv/g, 'w').replace(/./g, ch => PHISH_CONFUSABLE[ch] ?? ch);
+  }
+
+  function levDist(a, b) {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      let diag = prev[0]; prev[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const next = prev[j];
+        prev[j] = a[i - 1] === b[j - 1] ? diag : 1 + Math.min(diag, prev[j], prev[j - 1]);
+        diag = next;
+      }
+    }
+    return prev[b.length];
+  }
+
+  function checkPhishing(origin, extraProtectedDomains = [], trustedOrigins = []) {
+    if (!origin?.startsWith('https://')) return { suspicious: false };
+    if (Array.isArray(trustedOrigins) && trustedOrigins.includes(origin)) return { suspicious: false };
+    let hostname = '';
+    try { hostname = new URL(origin).hostname.toLowerCase(); } catch { return { suspicious: false }; }
+    if (!hostname) return { suspicious: false };
+    const extraRoots = new Set((Array.isArray(extraProtectedDomains) ? extraProtectedDomains : []).map(d => rootDomain(d)).filter(Boolean));
+    const official = new Set([...PROTECTED_ROOTS.map(rootDomain), ...extraRoots].filter(Boolean));
+    const candRoot = rootDomain(hostname);
+    if (official.has(candRoot)) return { suspicious: false };
+    const hasPuny = hostname.split('.').some(l => l.startsWith('xn--'));
+    const decodedBase = rootDomain(hostname.split('.').map(decodePunycode).join('.')).split('.')[0];
+    const candBase = candRoot.split('.')[0];
+    const subs = hostname.slice(0, Math.max(0, hostname.length - candRoot.length)).split('.').filter(Boolean);
+    for (const sub of subs) {
+      if (PHISH_EXCHANGE.has(sub)) return { suspicious: true, reason: 'brand_bait', hostname, candRoot, targetDomain: `${sub}.com` };
+    }
+    for (const targetDom of official) {
+      const targetBase = targetDom.split('.')[0];
+      if (!targetBase || targetBase.length < 3) continue;
+      if (hasPuny) {
+        const sa = skel(decodedBase); const sb = skel(targetBase);
+        if (sa === sb || (targetBase.length >= 5 && levDist(sa, sb) <= 1)) return { suspicious: true, reason: 'idn_homograph', hostname, candRoot, targetDomain: targetDom };
+      }
+      if (PHISH_SAFE.has(candBase) || PHISH_SAFE.has(targetBase)) continue;
+      if (candBase !== targetBase && skel(candBase) === skel(targetBase)) return { suspicious: true, reason: 'visual_homograph', hostname, candRoot, targetDomain: targetDom };
+      if (targetBase.length >= 5 && candBase.length >= 5 && candBase !== targetBase && levDist(candBase, targetBase) === 1) return { suspicious: true, reason: 'typosquat', hostname, candRoot, targetDomain: targetDom };
+      if (candBase.includes('-')) {
+        const parts = candBase.split('-').filter(Boolean);
+        if (parts.includes(targetBase) && parts.some(p => /^(?:login|signin|sign|auth|verify|verification|security|secure|account|wallet|2fa|otp|confirm|support|bonus|claim|airdrop|app|web|official|exchange|vip|pro)$/i.test(p))) {
+          return { suspicious: true, reason: 'brand_bait', hostname, candRoot, targetDomain: targetDom };
+        }
+      }
+      if (candBase === targetBase && candRoot !== targetDom && (extraRoots.has(targetDom) || PHISH_EXCHANGE.has(targetBase))) {
+        return { suspicious: true, reason: 'wrong_tld', hostname, candRoot, targetDomain: targetDom };
+      }
+    }
+    return { suspicious: false };
+  }
+
+  return { detect, detect2FA, detectAll, detectLinkPrompt, classifyChannel, insert, score, roots, buildCustomFieldDescriptor, resolveCustomField, checkPhishing };
 })();

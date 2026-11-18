@@ -148,7 +148,19 @@ function renderFieldStatus() {
     $('fieldType').textContent = t('descManual', 'No code field yet. You can still search your mail for codes or activation links.');
   }
   $('search').disabled = fieldStatus?.channel === 'authenticator' || fieldStatus?.channel === 'sms';
+  if ($('clearPickedFieldBtn')) $('clearPickedFieldBtn').hidden = !fieldStatus?.hasCustomField;
+  renderPhishingBanner(totpVault?.phishingAlert ?? fieldStatus?.phishingAlert);
   updateDualFillVisibility();
+}
+
+function renderPhishingBanner(alert) {
+  const banner = $('phishingBanner');
+  if (!banner) return;
+  const isSuspicious = Boolean(alert?.suspicious);
+  banner.hidden = !isSuspicious;
+  if (isSuspicious && $('phishingBannerText')) {
+    $('phishingBannerText').textContent = `⚠️ Внимание: ${alert.hostname} похож на фишинговый клон ${alert.targetDomain}. Автозаполнение заблокировано.`;
+  }
 }
 
 async function refreshFieldStatus() {
@@ -267,21 +279,38 @@ async function useCode() {
 
 async function useTotpCode(totpItem) {
   if (!totpItem?.code) return;
+  if (totpVault?.phishingAlert?.suspicious) {
+    showTotpStatus(`⚠️ Заблокировано: ${totpVault.phishingAlert.hostname} похож на фишинговый клон ${totpVault.phishingAlert.targetDomain}.`, 'err');
+    return;
+  }
   await refreshFieldStatus();
+  let chosen = totpItem;
   if (fieldStatus?.channel === 'authenticator' || fieldStatus?.has2faField || fieldStatus?.isDualField) {
+    if ((totpItem.remainingSeconds ?? 30) <= 3) {
+      showTotpStatus('⏳ До смены ≤3с — ждём свежий 30-сек код…', 'info');
+    }
     const res = await manageTotp({ command: 'insert_totp', tabId: tab.id, origin, id: totpItem.id, siteContext: fieldStatus?.siteContext }).catch(() => null);
-    if (res?.status === 'inserted') {
-      showTotpStatus('✓ 2FA код вставлен.');
+    if (res?.status === 'phishing_blocked') {
+      showTotpStatus(res.message, 'err');
       return;
     }
+    if (res?.code) chosen = { ...chosen, code: res.code, remainingSeconds: res.remainingSeconds };
+    if (res?.status === 'inserted') {
+      showTotpStatus(res.waitedForNextWindow ? '✓ Свежий 2FA код вставлен.' : '✓ 2FA код вставлен.');
+      return;
+    }
+  } else if ((totpItem.remainingSeconds ?? 30) <= 3) {
+    showTotpStatus('⏳ До смены ≤3с — ждём свежий 30-сек код…', 'info');
+    const fresh = await manageTotp({ command: 'fresh_code_by_id', id: totpItem.id }).catch(() => null);
+    if (fresh?.code) chosen = { ...chosen, code: fresh.code, remainingSeconds: fresh.remainingSeconds };
   }
   try {
-    await navigator.clipboard.writeText(totpItem.code);
+    await navigator.clipboard.writeText(chosen.code);
     chrome.runtime.sendMessage({ type: 'CLIPBOARD_COPIED' }).catch(() => {});
-    showTotpStatus(`✓ 2FA код ${totpItem.code} скопирован (очистится через 45 сек).`);
+    showTotpStatus(`✓ 2FA код ${chosen.code} скопирован (очистится через 45 сек).`);
   } catch {
-    const offscreenRes = await chrome.runtime.sendMessage({ type: 'COPY_CLIPBOARD', text: totpItem.code }).catch(() => null);
-    if (offscreenRes?.status === 'copied') showTotpStatus(`✓ 2FA код ${totpItem.code} скопирован.`);
+    const offscreenRes = await chrome.runtime.sendMessage({ type: 'COPY_CLIPBOARD', text: chosen.code }).catch(() => null);
+    if (offscreenRes?.status === 'copied') showTotpStatus(`✓ 2FA код ${chosen.code} скопирован.`);
   }
 }
 
@@ -421,6 +450,7 @@ async function refreshTotp() {
     if (!res || res.status !== 'ok') return;
     totpVault = res;
     totpSiteMatch = res.siteMatch ?? { status: 'none' };
+    renderPhishingBanner(res.phishingAlert ?? fieldStatus?.phishingAlert);
     const badge = $('authCountBadge');
     if (badge) { badge.textContent = String(res.count ?? 0); badge.hidden = !(res.count > 0); }
     $('totpLockBtn').hidden = !(res.pinProtected && res.unlocked);
@@ -505,15 +535,27 @@ function startLiveTicker() {
       totpSiteMatch.remainingSeconds = rem;
       const secEl = $('totpSecLive');
       const barEl = $('totpProgressBar');
-      if (secEl) secEl.textContent = `${rem}s`;
-      if (barEl) barEl.style.width = `${Math.round((rem / period) * 100)}%`;
+      if (secEl) {
+        secEl.textContent = rem <= 3 ? `⏳ ${rem}s → новый` : `${rem}s`;
+        secEl.classList.toggle('expiring', rem <= 3);
+      }
+      if (barEl) {
+        barEl.style.width = `${Math.round((rem / period) * 100)}%`;
+        barEl.classList.toggle('expiring', rem <= 3);
+      }
       for (const c of totpSiteMatch.candidates ?? []) {
         const cPer = c.period || 30;
         const cRem = cPer - (((epochSec % cPer) + cPer) % cPer);
         const sEl = $('totpResult')?.querySelector(`[data-totp-sec-id="${c.id}"]`);
         const bEl = $('totpResult')?.querySelector(`[data-totp-bar-id="${c.id}"]`);
-        if (sEl) sEl.textContent = `${cRem}s`;
-        if (bEl) bEl.style.width = `${Math.round((cRem / cPer) * 100)}%`;
+        if (sEl) {
+          sEl.textContent = cRem <= 3 ? `⏳ ${cRem}s → новый` : `${cRem}s`;
+          sEl.classList.toggle('expiring', cRem <= 3);
+        }
+        if (bEl) {
+          bEl.style.width = `${Math.round((cRem / cPer) * 100)}%`;
+          bEl.classList.toggle('expiring', cRem <= 3);
+        }
       }
     }
   }, 1000);
@@ -621,6 +663,38 @@ $('toggleMuteSite')?.addEventListener('click', async () => {
   await chrome.storage.local.set({ mutedOrigins: next });
   renderMuteControl();
   renderFieldStatus();
+});
+
+$('phishingTrustBtn')?.addEventListener('click', async () => {
+  if (!origin?.startsWith('https://')) return;
+  await chrome.runtime.sendMessage({ type: 'TRUST_PHISHING_ORIGIN', origin }).catch(() => {});
+  await refreshFieldStatus();
+  await refreshTotp();
+});
+
+$('pickFieldBtn')?.addEventListener('click', async () => {
+  if (!tab?.id || !origin?.startsWith('https://')) return;
+  const res = await chrome.runtime.sendMessage({
+    type: 'START_FIELD_PICKER',
+    tabId: tab.id,
+    defaultChannel: fieldStatus?.channel === 'authenticator' ? 'authenticator' : 'email'
+  }).catch(() => null);
+  if (res?.status === 'started') window.close?.();
+  else show(res?.message ?? 'Обновите страницу (F5) и попробуйте снова.', true);
+});
+
+$('clearPickedFieldBtn')?.addEventListener('click', async () => {
+  if (!origin?.startsWith('https://')) return;
+  await chrome.runtime.sendMessage({ type: 'CLEAR_CUSTOM_FIELD', origin }).catch(() => {});
+  await refreshFieldStatus();
+  show('Ручная привязка поля сброшена.', false);
+});
+
+$('totpRegionScanBtn')?.addEventListener('click', async () => {
+  if (!tab?.id || !origin?.startsWith('https://')) return;
+  const res = await chrome.runtime.sendMessage({ type: 'START_QR_SNIPER', tabId: tab.id }).catch(() => null);
+  if (res?.status === 'started') window.close?.();
+  else showTotpStatus(res?.message ?? 'Обновите вкладку (F5) и попробуйте снова.', 'err');
 });
 
 $('totpToggleAdd')?.addEventListener('click', () => {

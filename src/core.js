@@ -548,3 +548,170 @@ export function rankCandidates(messages, { siteId, sender = null, learnedSenders
   }
   return valid.length ? { status: 'found', candidate: valid[0] } : { status: old ? 'old' : 'none' };
 }
+
+const CONFUSABLE_MAP = {
+  а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'l', ј: 'j', ѕ: 's', ӏ: 'l',
+  в: 'b', к: 'k', м: 'm', н: 'h', т: 't',
+  α: 'a', ο: 'o', ρ: 'p', ε: 'e', ν: 'v', κ: 'k', τ: 't',
+  '0': 'o', '1': 'l', i: 'l'
+};
+
+const COMMON_SAFE_WORDS = new Set([
+  'example', 'localhost', 'bank', 'cloud', 'stream', 'switch', 'team', 'link',
+  'mail', 'post', 'gate', 'live', 'meta', 'line', 'base', 'woo'
+]);
+
+const UNIQUE_EXCHANGE_BASES = new Set([
+  'binance', 'bybit', 'blofin', 'okx', 'okex', 'kucoin', 'bitget', 'onebullex',
+  'bitunix', 'kcex', 'bingx', 'coinbase', 'kraken', 'phemex', 'deribit',
+  'whitebit', 'bitmart', 'toobit', 'weex', 'czrex'
+]);
+
+const PHISH_BAIT_WORDS = /^(?:login|signin|sign|auth|verify|verification|security|secure|account|wallet|2fa|otp|confirm|support|bonus|claim|airdrop|app|web|official|exchange|vip|pro)$/i;
+
+export function decodePunycodeLabel(label) {
+  const raw = String(label ?? '').toLowerCase();
+  if (!raw.startsWith('xn--')) return raw;
+  const encoded = raw.slice(4);
+  const delim = encoded.lastIndexOf('-');
+  const output = delim > 0 ? [...encoded.slice(0, delim)].map(c => c.codePointAt(0)) : [];
+  let idx = delim > 0 ? delim + 1 : 0;
+  let n = 128;
+  let bias = 72;
+  let i = 0;
+
+  const adapt = (delta, numpoints, first) => {
+    let d = first ? Math.floor(delta / 700) : Math.floor(delta / 2);
+    d += Math.floor(d / numpoints);
+    let k = 0;
+    while (d > 455) { d = Math.floor(d / 35); k += 36; }
+    return k + Math.floor((36 * d) / (d + 38));
+  };
+
+  while (idx < encoded.length) {
+    const oldi = i;
+    let w = 1;
+    for (let k = 36; ; k += 36) {
+      if (idx >= encoded.length) return raw;
+      const code = encoded.charCodeAt(idx++);
+      const digit = code >= 48 && code <= 57 ? code - 22 : code >= 97 && code <= 122 ? code - 97 : 36;
+      if (digit >= 36) return raw;
+      i += digit * w;
+      const t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+      if (digit < t) break;
+      w *= 36 - t;
+    }
+    const len = output.length + 1;
+    bias = adapt(i - oldi, len, oldi === 0);
+    n += Math.floor(i / len);
+    i %= len;
+    output.splice(i++, 0, n);
+  }
+  try {
+    return String.fromCodePoint(...output);
+  } catch {
+    return raw;
+  }
+}
+
+export function confusableSkeleton(str) {
+  return String(str ?? '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/rn/g, 'm')
+    .replace(/vv/g, 'w')
+    .replace(/./g, ch => CONFUSABLE_MAP[ch] ?? ch);
+}
+
+export function levenshteinDistance(a, b) {
+  const s = String(a ?? '');
+  const t = String(b ?? '');
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+  const prev = Array.from({ length: t.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= s.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= t.length; j++) {
+      const nextDiag = prev[j];
+      prev[j] = s[i - 1] === t[j - 1]
+        ? diag
+        : 1 + Math.min(diag, prev[j], prev[j - 1]);
+      diag = nextDiag;
+    }
+  }
+  return prev[t.length];
+}
+
+export function checkPhishingRisk(origin, extraProtectedDomains = [], trustedOrigins = []) {
+  if (!origin?.startsWith('https://')) return { suspicious: false };
+  if (Array.isArray(trustedOrigins) && trustedOrigins.includes(origin)) return { suspicious: false };
+
+  let hostname = '';
+  try { hostname = new URL(origin).hostname.toLowerCase(); } catch { return { suspicious: false }; }
+  if (!hostname) return { suspicious: false };
+
+  const extraRoots = new Set(
+    (Array.isArray(extraProtectedDomains) ? extraProtectedDomains : [])
+      .map(d => rootDomainOf(String(d ?? '').toLowerCase()))
+      .filter(Boolean)
+  );
+  const officialRoots = new Set([
+    ...ECOSYSTEMS.flatMap(e => e.siteDomains).map(d => rootDomainOf(d)),
+    ...extraRoots
+  ].filter(Boolean));
+
+  const candRoot = rootDomainOf(hostname);
+  if (officialRoots.has(candRoot)) return { suspicious: false };
+
+  const hasPunycode = hostname.split('.').some(l => l.startsWith('xn--'));
+  const decodedLabels = hostname.split('.').map(decodePunycodeLabel);
+  const decodedRoot = rootDomainOf(decodedLabels.join('.'));
+  const decodedBase = decodedRoot.split('.')[0];
+  const candBase = candRoot.split('.')[0];
+  const subLabels = hostname.slice(0, Math.max(0, hostname.length - candRoot.length)).split('.').filter(Boolean);
+
+  for (const sub of subLabels) {
+    if (UNIQUE_EXCHANGE_BASES.has(sub)) {
+      return { suspicious: true, reason: 'brand_bait', hostname, candRoot, targetDomain: `${sub}.com` };
+    }
+  }
+
+  for (const targetDom of officialRoots) {
+    const targetBase = targetDom.split('.')[0];
+    if (!targetBase || targetBase.length < 3) continue;
+
+    if (hasPunycode) {
+      const skelCand = confusableSkeleton(decodedBase);
+      const skelTarget = confusableSkeleton(targetBase);
+      if (skelCand === skelTarget || (targetBase.length >= 5 && levenshteinDistance(skelCand, skelTarget) <= 1)) {
+        return { suspicious: true, reason: 'idn_homograph', hostname, candRoot, targetDomain: targetDom };
+      }
+    }
+
+    if (COMMON_SAFE_WORDS.has(candBase) || COMMON_SAFE_WORDS.has(targetBase)) continue;
+
+    if (candBase !== targetBase && confusableSkeleton(candBase) === confusableSkeleton(targetBase)) {
+      return { suspicious: true, reason: 'visual_homograph', hostname, candRoot, targetDomain: targetDom };
+    }
+
+    if (targetBase.length >= 5 && candBase.length >= 5 && candBase !== targetBase && levenshteinDistance(candBase, targetBase) === 1) {
+      return { suspicious: true, reason: 'typosquat', hostname, candRoot, targetDomain: targetDom };
+    }
+
+    if (candBase.includes('-')) {
+      const dashParts = candBase.split('-').filter(Boolean);
+      if (dashParts.includes(targetBase) && dashParts.some(p => PHISH_BAIT_WORDS.test(p))) {
+        return { suspicious: true, reason: 'brand_bait', hostname, candRoot, targetDomain: targetDom };
+      }
+    }
+
+    if (candBase === targetBase && candRoot !== targetDom && (extraRoots.has(targetDom) || UNIQUE_EXCHANGE_BASES.has(targetBase))) {
+      return { suspicious: true, reason: 'wrong_tld', hostname, candRoot, targetDomain: targetDom };
+    }
+  }
+
+  return { suspicious: false };
+}

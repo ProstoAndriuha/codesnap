@@ -426,17 +426,18 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
       verifyDom.window.eval(contentSource);
 
       const beforeExpected = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx2 }, Date.now())).code;
+      const chipLiveRe = /^(?:\d{6}\s·\s\d+s|⏳\s*\d+s\s→\sновый)$/;
       let autoChip;
       for (let i = 0; i < 30; i++) {
         autoChip = verifyDom.window.document.querySelector('button[aria-label="Find verification code"]');
-        if (autoChip && /^\d{6}\s·\s\d+s$/.test(autoChip.textContent ?? '')) break;
+        if (autoChip && chipLiveRe.test(autoChip.textContent ?? '')) break;
         await new Promise(r => setTimeout(r, 25));
       }
       const afterExpected = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx2 }, Date.now())).code;
       assert.ok(autoChip, 'Expected auto-resolved TOTP chip');
       assert.ok(
-        autoChip.textContent.startsWith(beforeExpected) || autoChip.textContent.startsWith(afterExpected),
-        `Expected chip to show okx2 code (${beforeExpected}/${afterExpected}), got ${autoChip.textContent}`
+        autoChip.textContent.startsWith(beforeExpected) || autoChip.textContent.startsWith(afterExpected) || /^⏳\s*\d+s\s→\sновый$/.test(autoChip.textContent),
+        `Expected chip to show okx2 code (${beforeExpected}/${afterExpected}) or grace countdown, got ${autoChip.textContent}`
       );
       assert.match(autoChip.title, /tomaandreiw@gmail\.com/);
     } finally {
@@ -637,17 +638,18 @@ test('BloFin SPA 6-box, maxlength="6" and aria-hidden overlay 2FA forms detect a
         assert.equal(detected.channel, 'authenticator', `${layout.name}: expected channel=authenticator`);
 
         dom.window.eval(contentSource);
+        const liveChipRe = /^(?:\d{6}\s·\s\d+s|⏳\s*\d+s\s→\sновый)$/;
         let chip;
         for (let i = 0; i < 30; i++) {
           chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
-          if (chip && /^\d{6}\s·\s\d+s$/.test(chip.textContent ?? '')) break;
+          if (chip && liveChipRe.test(chip.textContent ?? '')) break;
           await new Promise(r => setTimeout(r, 25));
         }
-        assert.ok(chip && /^\d{6}\s·\s\d+s$/.test(chip.textContent ?? ''), `${layout.name}: expected live 2FA chip, got ${chip?.textContent}`);
+        assert.ok(chip && liveChipRe.test(chip.textContent ?? ''), `${layout.name}: expected live 2FA chip, got ${chip?.textContent}`);
 
         const beforeGen = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx1 }, Date.now())).code;
         chip.click();
-        for (let i = 0; i < 40; i++) {
+        for (let i = 0; i < 150; i++) {
           if (chip.textContent === '✓' && layout.readValue(dom.window.document).length === 6) break;
           await new Promise(r => setTimeout(r, 25));
         }
