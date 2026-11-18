@@ -123,7 +123,7 @@
     "message": "Appear automatically. Tap the code to insert it."
   },
   "proHeadline": {
-    "message": "Everything that makes verification effortless."
+    "message": "Direct Gmail OAuth, unlimited 2FA (>5), Dual Fill & Withdraw Check."
   },
   "proFeatAccounts": {
     "message": "✓ Multiple mail accounts"
@@ -141,7 +141,7 @@
     "message": "✓ 100% local & ad-free"
   },
   "proNote": {
-    "message": "All features run locally in your browser without external CodeSnap servers."
+    "message": "Offline Ed25519 verification — 100% local in your browser, zero servers."
   },
   "footerTrust": {
     "message": "CodeSnap never submits forms or opens links automatically."

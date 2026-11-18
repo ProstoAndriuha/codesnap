@@ -38,6 +38,7 @@ import {
   describeTotpError
 } from './totp.js';
 import { decodeCroppedQrDataUrl, classifyQrStringsForTotp } from './qr-scanner.js';
+import { getProStatus, activateProLicense, deactivateProLicense, FREE_TOTP_LIMIT } from './license.js';
 
 let hintsRefreshed = false;
 async function ensureTotpHintsFresh() {
@@ -632,6 +633,19 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     if (request.type === 'WEBMAIL_READY' || request.type === 'WEBMAIL_PUSH') {
       return handleWebmailPush(request, sender);
     }
+    if (request.type === 'LICENSE_ACTION') {
+      const isExtPage = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
+      if (!isExtPage) return { status: 'untrusted', message: 'Invalid page.' };
+      const payload = request.payload ?? {};
+      const command = payload.command;
+      if (command === 'status') return { ...(await getProStatus()), status: 'ok' };
+      if (command === 'activate') {
+        const res = await activateProLicense(payload.key);
+        return res.ok ? { ...res, status: 'ok' } : { ...res, status: 'error' };
+      }
+      if (command === 'deactivate') return { ...(await deactivateProLicense()), status: 'ok' };
+      return { status: 'untrusted', message: 'Invalid request.' };
+    }
     if (request.type === 'TOTP_ACTION') {
       const isPopup = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
       if (!isPopup) return { status: 'untrusted', message: 'Invalid page.' };
@@ -649,7 +663,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           const siteMatch = payload.origin ? await getTotpCandidatesForSite(payload.origin, mergedCtx) : { status: 'none', candidates: [] };
           const phishingAlert = payload.origin ? await getOriginPhishingAlert(payload.origin) : { suspicious: false };
           const clockState = await getTotpClockState();
-          return { status: 'ok', ...vaultStatus, siteMatch, phishingAlert, clockState };
+          const proStatus = await getProStatus();
+          return { status: 'ok', ...vaultStatus, siteMatch, phishingAlert, clockState, proStatus };
         }
         if (command === 'list_all') {
           await ensureTotpHintsFresh();
@@ -661,11 +676,26 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           const list = await listAllTotpCodes(payload.origin || '', mergedCtx);
           const phishingAlert = payload.origin ? await getOriginPhishingAlert(payload.origin) : { suspicious: false };
           const clockState = await getTotpClockState();
-          return { ...list, status: 'ok', vaultLocked: list.status === 'locked', phishingAlert, clockState };
+          const proStatus = await getProStatus();
+          return { ...list, status: 'ok', vaultLocked: list.status === 'locked', phishingAlert, clockState, proStatus };
         }
-        if (command === 'add') return { status: 'ok', ...await addTotpAccount(payload.input, payload.meta ?? {}) };
+        if (command === 'add') {
+          const pro = await getProStatus();
+          if (!pro.isPro) {
+            const vaultStatus = await getTotpVaultStatus();
+            if ((vaultStatus.count ?? 0) >= FREE_TOTP_LIMIT) {
+              return { status: 'pro_required', message: `В бесплатной версии доступно до ${FREE_TOTP_LIMIT} ключей 2FA. Активируйте ключ CodeSnap Pro (CS1-…) для безлимитного сейфа!` };
+            }
+          }
+          return { status: 'ok', ...await addTotpAccount(payload.input, payload.meta ?? {}) };
+        }
         if (command === 'update') return await updateTotpAccount(payload.id, payload.patch ?? {});
-        if (command === 'import') return await importTotpPayload(payload.text, payload.meta ?? {});
+        if (command === 'import') {
+          const pro = await getProStatus();
+          return await importTotpPayload(payload.text, payload.meta ?? {}, Date.now(), {
+            maxTotal: pro.isPro ? Infinity : FREE_TOTP_LIMIT
+          });
+        }
         if (command === 'export') return { status: 'ok', data: await exportTotpVault(payload.format || 'txt') };
         if (command === 'export_uri') return { status: 'ok', ...await exportTotpAccountUri(payload.id) };
         if (command === 'set_time_offset') return { status: 'ok', clockState: await setTotpTimeOffset(payload.offsetSeconds) };
@@ -673,6 +703,13 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
         if (command === 'add_entries') {
           const list = Array.isArray(payload.entries) ? payload.entries : [];
           if (!list.length) return { status: 'error', message: 'Не найдено ни одной 2FA-записи.' };
+          const pro = await getProStatus();
+          if (!pro.isPro) {
+            const vaultStatus = await getTotpVaultStatus();
+            if ((vaultStatus.count ?? 0) + list.length > FREE_TOTP_LIMIT) {
+              return { status: 'pro_required', message: `В бесплатной версии доступно до ${FREE_TOTP_LIMIT} ключей 2FA. Активируйте ключ CodeSnap Pro (CS1-…) для добавления всех ключей!` };
+            }
+          }
           const added = [];
           for (const item of list) {
             added.push(await addTotpAccount(item.secret, {
@@ -687,6 +724,13 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           return { status: 'ok', count: added.length, first: added[0], added };
         }
         if (command === 'scan_add') {
+          const pro = await getProStatus();
+          if (!pro.isPro) {
+            const vaultStatus = await getTotpVaultStatus();
+            if ((vaultStatus.count ?? 0) >= FREE_TOTP_LIMIT) {
+              return { status: 'pro_required', message: `В бесплатной версии доступно до ${FREE_TOTP_LIMIT} ключей 2FA. Активируйте ключ CodeSnap Pro (CS1-…)!` };
+            }
+          }
           if (!Number.isInteger(payload.tabId)) return { status: 'error', message: 'Откройте вкладку с настройкой 2FA.' };
           const scan = await chrome.tabs.sendMessage(payload.tabId, { type: 'SCAN_PAGE_TOTP' }, { frameId: 0 }).catch(() => null);
           if (scan?.status !== 'found') {
@@ -719,7 +763,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
         }
         return { status: 'untrusted', message: 'Invalid request.' };
       } catch (error) {
-        return { status: 'error', message: describeTotpError(error) };
+        return { status: error?.message === 'TOTP_PRO_LIMIT' ? 'pro_required' : 'error', message: describeTotpError(error) };
       }
     }
     if (request.type === 'TRUST_PHISHING_ORIGIN') {

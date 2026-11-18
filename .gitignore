@@ -12,3 +12,6 @@ __pycache__/
 CodeSnap-Mail/
 *.exe
 *.tmp
+*Owner-Keys*
+*private-key*
+*CodeSnap*Pro-Keys*

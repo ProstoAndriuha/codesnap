@@ -37,7 +37,15 @@ export async function connectPrimary() {
   const agent = globalThis.navigator?.userAgent ?? '';
   const otherChromium = /(?:Edg|OPR|Vivaldi)\//.test(agent) || Boolean(globalThis.navigator?.brave);
   if (otherChromium || typeof chrome.identity?.getAuthToken !== 'function') return connectAdditional();
-  const result = await chrome.identity.getAuthToken({ interactive: true });
+  let result;
+  try {
+    result = await chrome.identity.getAuthToken({ interactive: true });
+  } catch (err) {
+    if (/bad client|invalid[_\s.]*client|client.*not found|item_id|OAuth2 request failed/i.test(String(err?.message ?? ''))) {
+      return connectAdditional();
+    }
+    throw err;
+  }
   const token = typeof result === 'string' ? result : result?.token;
   if (!token) throw new Error('AUTH_EXPIRED');
   const email = await getGmailProfile(token);

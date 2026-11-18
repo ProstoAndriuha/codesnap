@@ -1094,7 +1094,7 @@ function parseImportItems(rawText, fallback = {}) {
   return parsedItems;
 }
 
-export async function importTotpPayload(rawText, fallback = {}, now = Date.now()) {
+export async function importTotpPayload(rawText, fallback = {}, now = Date.now(), { maxTotal = Infinity } = {}) {
   const incoming = parseImportItems(rawText, fallback);
   const { vault, entries } = await readVaultAndKey();
   const nextEntries = [...entries];
@@ -1112,6 +1112,10 @@ export async function importTotpPayload(rawText, fallback = {}, now = Date.now()
       nextEntries.push({ id: crypto.randomUUID(), ...item, createdAt: now });
       imported++;
     }
+  }
+
+  if (Number.isFinite(maxTotal) && nextEntries.length > maxTotal) {
+    throw new Error('TOTP_PRO_LIMIT');
   }
 
   await saveVaultEntries(nextEntries, vault);
@@ -1185,6 +1189,7 @@ export function describeTotpError(error) {
     TOTP_NOT_FOUND: 'Запись 2FA не найдена.',
     TOTP_IMPORT_EMPTY: 'Не найдено ни одной 2FA-записи для импорта.',
     TOTP_IMPORT_ENCRYPTED_JSON: 'Этот JSON-файл зашифрован паролем Authenticator. Экспортируйте незашифрованную копию (.txt с otpauth:// или обычный JSON) и импортируйте её.',
+    TOTP_PRO_LIMIT: 'В бесплатной версии доступно до 5 ключей 2FA. Активируйте ключ CodeSnap Pro (CS1-…) для безлимитного сейфа и массового импорта!',
     CLOCK_CHECK_FAILED: 'Не удалось сверить точное время с сервером. Поправку можно ввести вручную.'
   };
   return map[error?.message] ?? 'Не удалось обработать 2FA-ключ локально.';

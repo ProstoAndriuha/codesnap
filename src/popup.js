@@ -20,6 +20,7 @@ let refreshingTotp = false;
 let authController = null;
 let activeMode = 'mail';
 let showWithdrawalDetails = false;
+let proStatus = { isPro: false, status: 'free', freeTotpLimit: 5 };
 
 function formatMMSS(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -68,23 +69,65 @@ function renderMuteControl() {
     : `× ${t('muteThisSite', 'Hide chip on this site')}`;
 }
 
+function renderProState() {
+  const active = Boolean(proStatus?.isPro);
+  if ($('proHeroBadge')) $('proHeroBadge').hidden = !active;
+  if ($('proStatePill')) $('proStatePill').textContent = active ? '✦ АКТИВЕН' : 'FREE';
+  if ($('proActivateForm')) $('proActivateForm').hidden = active;
+  if ($('proActiveBar')) $('proActiveBar').hidden = !active;
+  if (active && $('proActiveMeta')) {
+    const expText = proStatus.lifetime
+      ? 'Навсегда'
+      : proStatus.expiresAt
+        ? `до ${new Date(proStatus.expiresAt).toLocaleDateString()}`
+        : 'Активен';
+    $('proActiveMeta').textContent = `✦ ${proStatus.keyId || 'PRO'} · ${expText}`;
+  }
+}
+
+async function refreshProStatus() {
+  const res = await chrome.runtime.sendMessage({ type: 'LICENSE_ACTION', payload: { command: 'status' } }).catch(() => null);
+  proStatus = res?.isPro !== undefined ? res : { isPro: false, status: 'free', freeTotpLimit: 5 };
+  renderProState();
+  configureProvider();
+  return proStatus;
+}
+
+function promptProUpgrade(reasonText) {
+  if (activeMode !== 'mail') void switchMode('mail');
+  if ($('proStatusMsg')) {
+    $('proStatusMsg').hidden = false;
+    $('proStatusMsg').className = 'pro-status-msg';
+    $('proStatusMsg').textContent = reasonText;
+  }
+  $('proCard')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  $('proKeyInput')?.focus();
+}
+
 function configureProvider() {
-  const provider = $('provider').value;
-  const preset = LOCAL_MAIL_PROVIDERS[provider];
-  const isGmailOAuth = provider === 'gmail';
+  const raw = $('provider').value;
+  const isGmailOAuth = raw === 'gmail';
+  const localKey = raw === 'gmail_web' ? 'gmail' : raw;
+  const preset = LOCAL_MAIL_PROVIDERS[localKey];
   const hint = $('localProviderHint');
   if (isGmailOAuth) {
-    hint.hidden = true;
     $('localApiForm').hidden = true;
-    $('connect').textContent = t('connectGmail', 'Connect mail');
+    if (proStatus?.isPro) {
+      hint.hidden = true;
+      $('connect').textContent = t('connectGmail', 'Connect mail');
+    } else {
+      hint.hidden = false;
+      hint.textContent = '🔒 Прямое подключение Google / Gmail OAuth без открытой вкладки доступно с ключом CodeSnap Pro. Активируйте ключ ниже или выберите «Gmail Web (вкладка — Free)».';
+      $('connect').textContent = '🔒 Ввести ключ CodeSnap Pro';
+    }
   } else {
     hint.hidden = false;
-    hint.textContent = `Откроет ${preset?.name ?? provider} во вкладке браузера. CodeSnap читает свежие коды и ссылки локально из открытой вкладки без пароля и серверов.`;
-    $('connect').textContent = `Открыть ${preset?.name ?? provider}`;
-    const hasApiOption = provider === 'fastmail' || provider === 'outlook';
+    hint.textContent = `Откроет ${preset?.name ?? localKey} во вкладке браузера (бесплатно). CodeSnap читает свежие коды и ссылки локально из открытой вкладки без пароля и серверов.`;
+    $('connect').textContent = `Открыть ${preset?.name ?? localKey}`;
+    const hasApiOption = raw === 'fastmail' || raw === 'outlook';
     $('localApiForm').hidden = !hasApiOption;
-    $('fastmailFields').hidden = provider !== 'fastmail';
-    $('outlookFields').hidden = provider !== 'outlook';
+    $('fastmailFields').hidden = raw !== 'fastmail';
+    $('outlookFields').hidden = raw !== 'outlook';
     $('localApiAdvanced').open = false;
   }
 }
@@ -470,6 +513,11 @@ async function refreshTotp() {
     if (!res || res.status !== 'ok') return;
     totpVault = res;
     totpSiteMatch = res.siteMatch ?? { status: 'none' };
+    if (res.proStatus) {
+      proStatus = res.proStatus;
+      renderProState();
+      configureProvider();
+    }
     renderPhishingBanner(res.phishingAlert ?? fieldStatus?.phishingAlert);
     const skewBanner = $('clockSkewBanner');
     const uncomp = Number(res.clockState?.uncompensatedSkewSeconds) || 0;
@@ -638,9 +686,15 @@ async function init() {
   applyI18n();
   const manifest = chrome.runtime.getManifest?.();
   if (manifest?.version && $('appVersion')) $('appVersion').textContent = manifest.version;
-  const settings = await chrome.storage.local.get(['autoWatch', 'detailedPopup', 'localWebmailEnabled', 'autoClearClipboard', 'showWithdrawalDetails', 'mutedOrigins']);
+  const settings = await chrome.storage.local.get(['autoWatch', 'detailedPopup', 'localWebmailEnabled', 'autoClearClipboard', 'showWithdrawalDetails', 'mutedOrigins', 'proLicenseKey']);
   const { autoWatch, detailedPopup, localWebmailEnabled, autoClearClipboard, mutedOrigins } = settings ?? {};
-  showWithdrawalDetails = settings?.showWithdrawalDetails === true;
+  if (settings?.proLicenseKey) {
+    await refreshProStatus();
+  } else {
+    proStatus = { isPro: false, status: 'free', freeTotpLimit: 5 };
+    renderProState();
+  }
+  showWithdrawalDetails = settings?.showWithdrawalDetails === true && Boolean(proStatus?.isPro);
   $('localWebmailEnabled').checked = localWebmailEnabled !== false;
   $('detailedPopup').checked = detailedPopup === true;
   if ($('autoClearClipboard')) $('autoClearClipboard').checked = autoClearClipboard !== false;
@@ -682,6 +736,10 @@ $('popoutAuthBtn')?.addEventListener('click', async () => {
 
 $('dualFillBtn')?.addEventListener('click', async () => {
   if (!current?.sessionId) return;
+  if (!proStatus?.isPro) {
+    promptProUpgrade('🔒 Кнопка «Почта + 2FA в 1 клик» доступна с ключом CodeSnap Pro (CS1-…).');
+    return;
+  }
   const res = await chrome.runtime.sendMessage({
     type: 'INSERT_DUAL_POPUP',
     tabId: tab.id,
@@ -833,6 +891,10 @@ $('totpSetPinBtn')?.addEventListener('click', async () => {
 
 $('connect').addEventListener('click', async () => {
   const provider = $('provider').value;
+  if (provider === 'gmail' && !proStatus?.isPro) {
+    promptProUpgrade('🔒 Прямой Google / Gmail OAuth доступен с ключом CodeSnap Pro (CS1-…). Бесплатно можно выбрать «Gmail Web (вкладка — Free)».');
+    return;
+  }
   $('connect').disabled = true;
   try {
     if (provider === 'gmail') {
@@ -842,9 +904,10 @@ $('connect').addEventListener('click', async () => {
       $('accounts').textContent = `Connected ${email}. Looking for your code…`;
       void searchLatest();
     } else {
-      const res = await manageLocalMail({ command: 'connect', provider });
+      const localProvider = provider === 'gmail_web' ? 'gmail' : provider;
+      const res = await manageLocalMail({ command: 'connect', provider: localProvider });
       await refreshAccounts();
-      $('accounts').textContent = `Готово: ${res.account?.email ?? LOCAL_MAIL_PROVIDERS[provider]?.name}. Войдите в почту в открытой вкладке.`;
+      $('accounts').textContent = `Готово: ${res.account?.email ?? LOCAL_MAIL_PROVIDERS[localProvider]?.name}. Войдите в почту в открытой вкладке.`;
     }
   } catch (error) {
     show(provider === 'gmail' ? describeAuthError(error) : error.message);
@@ -924,9 +987,59 @@ $('autoClearClipboard')?.addEventListener('change', async () => {
 });
 
 $('showWithdrawalDetails')?.addEventListener('change', async () => {
+  if ($('showWithdrawalDetails').checked && !proStatus?.isPro) {
+    $('showWithdrawalDetails').checked = false;
+    promptProUpgrade('🔒 Настройка «Withdraw Check» (показ суммы и кошелька из письма) доступна в CodeSnap Pro.');
+    return;
+  }
   showWithdrawalDetails = $('showWithdrawalDetails').checked;
   await chrome.storage.local.set({ showWithdrawalDetails });
   if (current) showResult(current);
+});
+
+$('proActivateForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const key = $('proKeyInput')?.value?.trim() || '';
+  if (!key) {
+    promptProUpgrade('Вставьте лицензионный ключ формата CS1-…');
+    return;
+  }
+  if ($('proActivateBtn')) $('proActivateBtn').disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'LICENSE_ACTION', payload: { command: 'activate', key } }).catch(() => null);
+    if (res?.status === 'ok' && res.isPro) {
+      if ($('proKeyInput')) $('proKeyInput').value = '';
+      if ($('proStatusMsg')) {
+        $('proStatusMsg').hidden = false;
+        $('proStatusMsg').className = 'pro-status-msg ok';
+        $('proStatusMsg').textContent = `✓ CodeSnap Pro активирован (${res.keyId})! Разблокирован прямой Gmail OAuth и безлимит 2FA.`;
+      }
+      await refreshProStatus();
+      await refreshTotp();
+    } else {
+      if ($('proStatusMsg')) {
+        $('proStatusMsg').hidden = false;
+        $('proStatusMsg').className = 'pro-status-msg';
+        $('proStatusMsg').textContent = res?.message ?? 'Недействительный ключ Pro.';
+      }
+    }
+  } finally {
+    if ($('proActivateBtn')) $('proActivateBtn').disabled = false;
+  }
+});
+
+$('proDeactivateBtn')?.addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'LICENSE_ACTION', payload: { command: 'deactivate' } }).catch(() => {});
+  showWithdrawalDetails = false;
+  if ($('showWithdrawalDetails')) $('showWithdrawalDetails').checked = false;
+  await chrome.storage.local.set({ showWithdrawalDetails: false }).catch(() => {});
+  if ($('proStatusMsg')) {
+    $('proStatusMsg').hidden = false;
+    $('proStatusMsg').className = 'pro-status-msg';
+    $('proStatusMsg').textContent = 'Ключ Pro отключён.';
+  }
+  await refreshProStatus();
+  await refreshTotp();
 });
 
 $('clockSkewFixBtn')?.addEventListener('click', async () => {

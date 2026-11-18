@@ -73,6 +73,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   let editingId = null;
   let pinProtected = false;
   let vaultLocked = false;
+  let proStatus = { isPro: false, status: 'free', freeTotpLimit: 5 };
   let clockState = { offsetSeconds: 0, detectedSkewSeconds: null, detectedSkewAt: null, uncompensatedSkewSeconds: 0 };
   let activeQrId = null;
   let activeQrUri = '';
@@ -114,7 +115,13 @@ export async function mountAuthenticatorView(container, options = {}) {
   clockBtn.title = 'Точное время и автопоправка сдвига 2FA';
   clockBtn.textContent = '⏱';
 
-  leftBtns.append(importBtn, pinBtn, clockBtn);
+  const proBtn = document.createElement('button');
+  proBtn.type = 'button';
+  proBtn.className = 'auth-icon-btn';
+  proBtn.title = 'Лицензия CodeSnap Pro (CS1-…)';
+  proBtn.textContent = '✦';
+
+  leftBtns.append(importBtn, pinBtn, clockBtn, proBtn);
 
   const title = document.createElement('div');
   title.className = 'auth-bar-title';
@@ -205,6 +212,10 @@ export async function mountAuthenticatorView(container, options = {}) {
   async function sendTotpAction(payload) {
     const res = await chrome.runtime.sendMessage({ type: 'TOTP_ACTION', payload });
     if (res?.status && res.status !== 'ok') {
+      if (res.status === 'pro_required') {
+        drawerMode = 'pro';
+        renderDrawer();
+      }
       throw new Error(res.message ?? 'Ошибка 2FA.');
     }
     return res;
@@ -388,6 +399,58 @@ export async function mountAuthenticatorView(container, options = {}) {
         }
       });
       drawer.append(form);
+      return;
+    }
+
+    if (drawerMode === 'pro') {
+      const box = document.createElement('div');
+      box.className = 'auth-form';
+      const heading = document.createElement('strong');
+      heading.className = 'auth-drawer-title';
+      heading.textContent = proStatus?.isPro ? '✦ CodeSnap Pro активен' : 'Лицензия CodeSnap Pro';
+      const desc = document.createElement('p');
+      desc.className = 'subtle';
+      desc.textContent = proStatus?.isPro
+        ? `Ключ ${proStatus.keyId || 'PRO'} (${proStatus.lifetime ? 'Навсегда' : 'активен'}). Доступен безлимит 2FA (>5), прямой Gmail OAuth и Withdraw Check.`
+        : `В бесплатной версии доступно до ${proStatus?.freeTotpLimit ?? 5} ключей 2FA. Введите ключ CS1-… для безлимита и массового импорта.`;
+      box.append(heading, desc);
+      if (proStatus?.isPro) {
+        const offBtn = document.createElement('button');
+        offBtn.type = 'button';
+        offBtn.className = 'text-button';
+        offBtn.textContent = 'Отключить / сменить ключ Pro';
+        offBtn.addEventListener('click', async () => {
+          await chrome.runtime.sendMessage({ type: 'LICENSE_ACTION', payload: { command: 'deactivate' } }).catch(() => {});
+          setStatus('Ключ Pro отключён.', 'info');
+          await refreshList();
+        });
+        box.append(offBtn);
+      } else {
+        const form = document.createElement('form');
+        form.className = 'auth-form';
+        const keyIn = document.createElement('input');
+        keyIn.autocomplete = 'off';
+        keyIn.spellcheck = false;
+        keyIn.placeholder = 'Вставьте ключ CS1-…';
+        const actBtn = document.createElement('button');
+        actBtn.type = 'submit';
+        actBtn.className = 'secondary full-btn';
+        actBtn.textContent = 'Активировать Pro';
+        form.append(keyIn, actBtn);
+        form.addEventListener('submit', async e => {
+          e.preventDefault();
+          const res = await chrome.runtime.sendMessage({ type: 'LICENSE_ACTION', payload: { command: 'activate', key: keyIn.value.trim() } }).catch(() => null);
+          if (res?.status === 'ok') {
+            drawerMode = null;
+            setStatus(`✓ CodeSnap Pro активирован (${res.keyId})!`, 'ok');
+            await refreshList();
+          } else {
+            setStatus(res?.message ?? 'Недействительный ключ Pro.', 'err');
+          }
+        });
+        box.append(form);
+      }
+      drawer.append(box);
       return;
     }
 
@@ -814,6 +877,9 @@ export async function mountAuthenticatorView(container, options = {}) {
       pinProtected = Boolean(res.pinProtected);
       vaultLocked = Boolean(res.vaultLocked);
       phishingAlert = res.phishingAlert ?? { suspicious: false };
+      proStatus = res.proStatus ?? proStatus;
+      proBtn.textContent = proStatus?.isPro ? '✦ PRO' : '✦';
+      proBtn.classList.toggle('active', drawerMode === 'pro' || Boolean(proStatus?.isPro));
       clockState = res.clockState ?? { offsetSeconds: Number(res.timeOffsetSeconds) || 0, detectedSkewSeconds: null, uncompensatedSkewSeconds: 0 };
       clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
       items = Array.isArray(res.items) ? res.items : [];
@@ -847,6 +913,11 @@ export async function mountAuthenticatorView(container, options = {}) {
   clockBtn.addEventListener('click', () => {
     drawerMode = drawerMode === 'clock' ? null : 'clock';
     clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
+    renderDrawer();
+  });
+  proBtn.addEventListener('click', () => {
+    drawerMode = drawerMode === 'pro' ? null : 'pro';
+    proBtn.classList.toggle('active', drawerMode === 'pro' || Boolean(proStatus?.isPro));
     renderDrawer();
   });
   editBtn.addEventListener('click', () => {

@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.3.0</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="pro-hero-pill" id="proHeroBadge" hidden>PRO</span><span class="version" id="appVersion">1.4.0</span></div>
     <p data-i18n="tagline">Your email codes &amp; activation links, 100% locally.</p>
   </header>
 
@@ -89,7 +89,8 @@
       <select id="account"><option value="all" data-i18n="allAccounts">All connected accounts</option></select>
       <label class="sr-only" for="provider" data-i18n="mailProviderLabel">Mail service</label>
       <select id="provider">
-        <option value="gmail">Google / Gmail (OAuth)</option>
+        <option value="gmail">Google / Gmail (OAuth · PRO)</option>
+        <option value="gmail_web">Gmail Web (вкладка — Free)</option>
         <option value="yandex">Яндекс Почта (вкладка)</option>
         <option value="outlook">Outlook / Hotmail (вкладка / Graph)</option>
         <option value="yahoo">Yahoo Mail (вкладка)</option>
@@ -133,15 +134,24 @@
         <label class="setting-check"><input id="localWebmailEnabled" type="checkbox" checked><span><strong data-i18n="localWebmailTitle">Local webmail tabs</strong><small data-i18n="localWebmailDescription">Read recent codes and activation links locally from open Yandex, Outlook, Yahoo, Mail.ru, Proton, iCloud, Zoho, Rambler, Fastmail, AOL and GMX tabs without passwords.</small></span></label>
         <label class="setting-check"><input id="detailedPopup" type="checkbox"><span><strong data-i18n="detailedPopupTitle">Detailed popup</strong><small data-i18n="detailedPopupDescription">Show code, link, sender, account and time beside the field.</small></span></label>
         <label class="setting-check"><input id="autoClearClipboard" type="checkbox" checked><span><strong data-i18n="autoClearTitle">Auto-clear clipboard</strong><small data-i18n="autoClearDescription">Clear copied verification codes from clipboard after 45 seconds.</small></span></label>
-        <label class="setting-check"><input id="showWithdrawalDetails" type="checkbox"><span><strong data-i18n="withdrawCheckTitle">Withdrawal details check</strong><small data-i18n="withdrawCheckDescription">Show amount and wallet address from withdrawal emails beside the code to protect against address tampering.</small></span></label>
+        <label class="setting-check"><input id="showWithdrawalDetails" type="checkbox"><span><strong><span data-i18n="withdrawCheckTitle">Withdrawal details check</span> <span class="mini-pro">PRO</span></strong><small data-i18n="withdrawCheckDescription">Show amount and wallet address from withdrawal emails beside the code to protect against address tampering.</small></span></label>
       </details>
     </section>
 
-    <section class="pro-card" aria-label="CodeSnap Pro preview">
-      <div class="pro-top"><span class="pro-logo">✦</span><span>CodeSnap <strong>Pro</strong></span><span class="preview-pill">LOCAL</span></div>
-      <p data-i18n="proHeadline">Everything that makes verification effortless.</p>
-      <div class="pro-features"><span data-i18n="proFeatAccounts">✓ Multiple mail accounts</span><span data-i18n="proFeatBeside">✓ Codes &amp; links beside fields</span><span data-i18n="proFeatSpeed">✓ Faster active search</span><span data-i18n="proFeatMatch">✓ Smart site matching</span><span data-i18n="proFeatAdFree">✓ 100% local &amp; ad-free</span></div>
-      <p class="pro-note" data-i18n="proNote">All features run locally in your browser without external CodeSnap servers.</p>
+    <section class="pro-card" id="proCard" aria-label="CodeSnap Pro">
+      <div class="pro-top"><span class="pro-logo">✦</span><span>CodeSnap <strong>Pro</strong></span><span class="preview-pill" id="proStatePill">FREE</span></div>
+      <p id="proHeadlineText" data-i18n="proHeadline">Direct Gmail OAuth, unlimited 2FA, Dual Fill &amp; Withdraw Check.</p>
+      <div class="pro-features"><span>✓ Прямой Gmail OAuth</span><span>✓ Безлимит 2FA (&gt;5)</span><span>✓ Dual Fill в 1 клик</span><span>✓ Withdraw Check</span></div>
+      <form id="proActivateForm" class="pro-key-form">
+        <input id="proKeyInput" autocomplete="off" spellcheck="false" placeholder="Вставьте ключ CS1-…">
+        <button id="proActivateBtn" type="submit">Активировать</button>
+      </form>
+      <div id="proActiveBar" class="pro-active-bar" hidden>
+        <span id="proActiveMeta">✦ Лицензия Pro активна</span>
+        <button id="proDeactivateBtn" class="pro-unlink-btn" type="button">Сменить ключ</button>
+      </div>
+      <p class="pro-status-msg" id="proStatusMsg" hidden></p>
+      <p class="pro-note" data-i18n="proNote">Offline Ed25519 verification — 100% local in your browser, zero servers.</p>
     </section>
     <p class="footer-note" id="trust" data-i18n="footerTrust">CodeSnap never submits forms or opens links automatically.</p>
     </div>
