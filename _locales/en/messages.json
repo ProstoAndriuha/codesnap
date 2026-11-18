@@ -253,5 +253,11 @@
   },
   "inlineExpiredShort": {
     "message": "Expired"
+  },
+  "withdrawCheckTitle": {
+    "message": "Withdrawal details check"
+  },
+  "withdrawCheckDescription": {
+    "message": "Show amount and wallet address from withdrawal emails beside the code to protect against address tampering."
   }
 }

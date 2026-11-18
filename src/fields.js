@@ -983,5 +983,64 @@ globalThis.VerificationFields = (() => {
     return { suspicious: false };
   }
 
-  return { detect, detect2FA, detectAll, detectLinkPrompt, classifyChannel, insert, score, roots, buildCustomFieldDescriptor, resolveCustomField, checkPhishing };
+  function findCellGroup(target) {
+    if (!target || target.nodeType !== 1) return null;
+    const baseInput = target.closest?.('input, [contenteditable="true"], [contenteditable=""]') ??
+      (isEditableElement(target) ? target : null);
+    if (!baseInput || !visible(baseInput)) return null;
+    let ancestor = baseInput.parentElement;
+    for (let depth = 0; ancestor && depth < 12; depth++, ancestor = ancestor.parentElement) {
+      if (ancestor.tagName === 'BODY' || ancestor.tagName === 'HTML') break;
+      const inputs = [...ancestor.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]')].filter(visible);
+      if (inputs.length < 4 || inputs.length > 8 || !inputs.includes(baseInput)) continue;
+      const cellLike = inputs.every(candidate => {
+        if (!visible(candidate)) return false;
+        const attrs = attributeText(candidate);
+        if (EXCLUDED_ATTRS.test(attrs)) return false;
+        if (candidate.tagName === 'INPUT') {
+          if (candidate.type === 'email' || /(?:email|username|current-password|new-password)/i.test(candidate.autocomplete ?? '')) return false;
+          if ((candidate.value ?? '').length > (candidate === baseInput ? 240 : Math.max(1, inputs.length))) return false;
+          return candidate.maxLength === 1 || candidate.maxLength < 0 || candidate.maxLength === 2 || candidate.maxLength === inputs.length || CELL_ARIA.test(candidate.getAttribute?.('aria-label') ?? '');
+        }
+        return (candidate.textContent ?? '').trim().length <= 1;
+      });
+      if (!cellLike) continue;
+      const strictlySingleChar = inputs.every(c => c.maxLength === 1 || CELL_ARIA.test(c.getAttribute?.('aria-label') ?? ''));
+      if (!strictlySingleChar) {
+        if (!inputs.every(c => c.tagName === inputs[0].tagName && (c.type ?? '') === (inputs[0].type ?? '') && c.maxLength === inputs[0].maxLength)) continue;
+        if (typeof inputs[0].getBoundingClientRect === 'function') {
+          const w0 = inputs[0].getBoundingClientRect().width;
+          if (w0 > 0 && inputs.some(c => { const w = c.getBoundingClientRect().width; return w <= 0 || w > 240; })) continue;
+        }
+      }
+      return {
+        type: 'group',
+        inputs,
+        anchor: inputs.at(-1),
+        expectedLength: inputs.length
+      };
+    }
+    return null;
+  }
+
+  function extractCleanPasteCode(rawText, expectedLength = null) {
+    const raw = String(rawText ?? '').trim();
+    if (!raw) return null;
+    const compact = raw.replace(/[\s\-_]+/g, '');
+    if (/^[A-Za-z0-9]{4,8}$/.test(compact) && (!expectedLength || compact.length === expectedLength)) {
+      return compact;
+    }
+    if (expectedLength >= 4 && expectedLength <= 8 && raw.length <= 240) {
+      const re = new RegExp(`(?:^|[^A-Za-z0-9])(\\d{${expectedLength}}|[A-Z0-9]{${expectedLength}})(?=$|[^A-Za-z0-9])`);
+      const m = re.exec(raw);
+      if (m) return m[1];
+    }
+    if (!expectedLength && raw.length <= 240) {
+      const m = /(?:^|[^A-Za-z0-9])(\d{4,8})(?=$|[^A-Za-z0-9])/.exec(raw);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  return { detect, detect2FA, detectAll, detectLinkPrompt, classifyChannel, insert, score, roots, buildCustomFieldDescriptor, resolveCustomField, checkPhishing, findCellGroup, extractCleanPasteCode };
 })();

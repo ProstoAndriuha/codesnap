@@ -32,10 +32,32 @@ function bodyParts(payload) {
   return { text, html };
 }
 
+let lastSkewSavedAt = 0;
+let lastSkewSavedVal = null;
+
+function captureServerDateSkew(response, reqStart, reqEnd) {
+  const dateHeader = response?.headers?.get?.('Date') || response?.headers?.get?.('date');
+  if (!dateHeader || reqEnd - reqStart > 8000) return;
+  const serverMs = Date.parse(dateHeader);
+  if (!Number.isFinite(serverMs)) return;
+  const localMid = Math.round((reqStart + reqEnd) / 2);
+  const skewSec = Math.round((serverMs - localMid) / 1000);
+  if (Math.abs(skewSec) > 86_400) return;
+  if (reqEnd - lastSkewSavedAt > 60_000 || lastSkewSavedVal === null || Math.abs(skewSec - lastSkewSavedVal) >= 5) {
+    lastSkewSavedAt = reqEnd;
+    lastSkewSavedVal = skewSec;
+    globalThis.chrome?.storage?.local?.set?.({
+      detectedClockSkewSec: skewSec,
+      detectedClockSkewAt: reqEnd
+    })?.catch?.(() => {});
+  }
+}
+
 export async function apiFetch(url, token, retries = 3) {
   let attempt = 0;
   while (true) {
     let response;
+    let reqStart = Date.now();
     try {
       response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
     } catch {
@@ -47,6 +69,7 @@ export async function apiFetch(url, token, retries = 3) {
       }
       throw new Error('GMAIL_UNAVAILABLE');
     }
+    captureServerDateSkew(response, reqStart, Date.now());
 
     if (response.status === 429 || (response.status >= 500 && response.status <= 504)) {
       if (attempt < retries) {

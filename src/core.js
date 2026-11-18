@@ -469,6 +469,70 @@ function siteRelation(message, identity) {
   };
 }
 
+export function extractWithdrawalInfo(subject, body) {
+  const subj = String(subject ?? '');
+  const txt = String(body ?? '').slice(0, 4500);
+  const combined = `${subj}\n${txt}`;
+  if (!/(?:\bwithdraw(?:al|ing|n)?\b|\bcash\s*out\b|\bpayout\b|\bsend(?:ing)?\s+(?:crypto|funds|assets)\b|\btransfer\s+out\b|вывод(?:а|у|ом|е)?\b|сняти[ея]\s+средств|отправк[аи]\s+средств|подтверждени[ея]\s+вывода)/i.test(combined)) {
+    return null;
+  }
+
+  const normalizeNum = raw => {
+    const cleaned = String(raw ?? '').replace(/\s+/g, '');
+    if (/^\d+,\d{1,8}$/.test(cleaned)) return cleaned.replace(',', '.');
+    return cleaned.replace(/,/g, '');
+  };
+
+  const TICKERS = '(?:USDT|USDC|BTC|ETH|SOL|TON|TRX|BNB|XRP|DOGE|DAI|ARB|OP|POL|MATIC|APT|SUI|AVAX|LINK|LTC|DOT|ADA|BCH|NEAR|PEPE|SHIB|USD|EUR|RUB|UAH|KZT|GBP|TRY)';
+  let amount = null;
+  let currency = null;
+  const labeledAmount = new RegExp(`(?:amount|sum|quantity|withdraw(?:ing)?|вывод(?:ите|а)?|сумма(?:\\s+вывода)?)\\s*[:\\-–=]?\\s*(\\d+(?:[\\s,]\\d{3})*(?:[.,]\\d{1,8})?)\\s*(${TICKERS})\\b`, 'i').exec(combined);
+  if (labeledAmount) {
+    amount = normalizeNum(labeledAmount[1]);
+    currency = labeledAmount[2].toUpperCase();
+  } else {
+    const standalone = new RegExp(`\\b(\\d+(?:[\\s,]\\d{3})*(?:[.,]\\d{1,8})?)\\s+(${TICKERS})\\b`, 'i').exec(combined);
+    if (standalone) {
+      amount = normalizeNum(standalone[1]);
+      currency = standalone[2].toUpperCase();
+    }
+  }
+
+  let address = null;
+  const chainMatch =
+    /\b(0x[a-fA-F0-9]{40})\b/.exec(combined) ||
+    /\b(T[1-9A-HJ-NP-Za-km-z]{33})\b/.exec(combined) ||
+    /\b(bc1[ac-hj-np-z02-9]{25,59}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b/.exec(combined) ||
+    /\b((?:UQ|EQ)[A-Za-z0-9_-]{46})\b/.exec(combined);
+  if (chainMatch) {
+    address = chainMatch[1];
+  } else {
+    const labelRe = /(?:(?:wallet|destination|recipient|to)\s+address|address|destination|recipient|wallet|на\s+адрес|адрес(?:\s+кошелька|\s+получателя)?|кошел[её]к|\bto)\s*(?:[:\-–=]\s*|\s+)([A-Za-z0-9][A-Za-z0-9_.*:…-]{7,79}[A-Za-z0-9])/gi;
+    for (const m of combined.matchAll(labelRe)) {
+      const cand = m[1].replace(/[.,;]+$/, '');
+      if (/\d|[*_.:…]/.test(cand) || cand.length >= 24) {
+        address = cand;
+        break;
+      }
+    }
+  }
+
+  if (!amount && !address) return null;
+  const addressShort = address
+    ? (address.length > 13 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address)
+    : null;
+  const summaryParts = [];
+  if (amount && currency) summaryParts.push(`${amount} ${currency}`);
+  if (addressShort) summaryParts.push(`→ ${addressShort}`);
+  return {
+    amount,
+    currency,
+    address,
+    addressShort,
+    summary: summaryParts.join(' ')
+  };
+}
+
 export function rankCandidates(messages, { siteId, sender = null, learnedSenders = [], preferredAccount = null, origin = '', siteContext = {}, startedAt = null, startToleranceMs = 60_000, now = Date.now() }) {
   const valid = [];
   const identity = siteIdentity(origin, siteContext);
@@ -489,6 +553,7 @@ export function rankCandidates(messages, { siteId, sender = null, learnedSenders
     if (!sender && !learned && !relation.senderRelated && !relation.bodyBrand) continue;
 
     const bestLink = links[0] ?? null;
+    const withdrawalInfo = extractWithdrawalInfo(message.subject, message.body);
     const maskedBoost = matchesMaskedEmail(message.accountEmail, siteContext.maskedEmail) ? 2.5 : 0;
     const accountBoost = normPreferred && message.accountEmail && normalizeSender(message.accountEmail) === normPreferred ? 3 : 0;
     const recency = Math.max(0, 3 - (now - Number(message.timestamp)) / 60_000);
@@ -503,6 +568,7 @@ export function rankCandidates(messages, { siteId, sender = null, learnedSenders
           kind: bestLink ? 'both' : 'code',
           code: option.code,
           link: bestLink ? { url: bestLink.url, label: bestLink.label, host: bestLink.host } : null,
+          withdrawalInfo,
           timestamp: Number(message.timestamp),
           lifetimeSeconds: lifetime,
           from: normalizeSender(message.from),
@@ -522,6 +588,7 @@ export function rankCandidates(messages, { siteId, sender = null, learnedSenders
         kind: 'link',
         code: null,
         link: { url: bestLink.url, label: bestLink.label, host: bestLink.host },
+        withdrawalInfo,
         timestamp: Number(message.timestamp),
         lifetimeSeconds: lifetime,
         from: normalizeSender(message.from),

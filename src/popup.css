@@ -161,3 +161,18 @@ select:focus-visible,button:focus-visible,.switch input:focus-visible+.slider{ou
 .auth-pie{width:18px;height:18px}
 .auth-inline-edit{display:flex;flex-direction:column;gap:6px;margin-top:9px;padding-top:9px;border-top:1px solid #ebeff7}
 .auth-empty{margin:12px 4px;text-align:center;color:#738096;font-size:12px;line-height:1.5}
+.auth-tile-right{display:inline-flex;align-items:center;gap:6px;flex:none}
+.auth-qr-btn{padding:2px 5px;border:1px solid #e2e8f6;border-radius:6px;background:#f8faff;font-size:12px;line-height:1.2}
+.auth-qr-btn:hover,.auth-qr-btn.active{background:#edf1ff;border-color:#8da2f6}
+.auth-qr-box{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:10px;padding:10px;border-top:1px dashed #dbe3f4;background:#fafcff;border-radius:10px}
+.auth-qr-svg{width:172px;height:172px;border:1px solid #e3e8f4;border-radius:8px;background:#fff}
+.auth-qr-hint{margin:0;text-align:center;color:#62708a;font-size:10.5px;line-height:1.35}
+.auth-clock-manual{display:flex;align-items:center;gap:6px}
+.auth-clock-manual input{flex:1;min-width:0}
+.clock-skew-banner{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding:8px 10px;border:1px solid #f2c88b;border-radius:10px;background:#fff8eb;color:#945208;font-size:11px;font-weight:650;line-height:1.35}
+.clock-skew-banner[hidden]{display:none}
+.clock-skew-banner button{flex:none;color:#8b4704;font-weight:750}
+.withdraw-badge{margin-top:7px;padding:6px 9px;border:1px solid #f2c88b;border-radius:8px;background:#fff8eb;color:#945208;font-size:11px;font-weight:700;line-height:1.35;overflow-wrap:anywhere}
+.split-paste-form{display:flex;align-items:center;gap:6px;margin-top:8px}
+.split-paste-form[hidden]{display:none}
+.split-paste-form input{flex:1;min-width:0;padding:7px 9px;border:1px solid #dce3ef;border-radius:8px;background:#fbfcff;color:#263752;font:12px system-ui}

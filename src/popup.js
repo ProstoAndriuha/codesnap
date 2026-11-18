@@ -19,6 +19,7 @@ let liveTicker = null;
 let refreshingTotp = false;
 let authController = null;
 let activeMode = 'mail';
+let showWithdrawalDetails = false;
 
 function formatMMSS(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -149,6 +150,7 @@ function renderFieldStatus() {
   }
   $('search').disabled = fieldStatus?.channel === 'authenticator' || fieldStatus?.channel === 'sms';
   if ($('clearPickedFieldBtn')) $('clearPickedFieldBtn').hidden = !fieldStatus?.hasCustomField;
+  if ($('splitPasteBtn')) $('splitPasteBtn').hidden = !origin?.startsWith('https://') || !(fieldStatus?.detected || fieldStatus?.has2faField);
   renderPhishingBanner(totpVault?.phishingAlert ?? fieldStatus?.phishingAlert);
   updateDualFillVisibility();
 }
@@ -222,6 +224,15 @@ function showResult(result) {
       actionsRow.append(copyLink);
       root.append(actionsRow);
     }
+  }
+
+  if (showWithdrawalDetails && result.withdrawalInfo?.summary) {
+    const wdBadge = document.createElement('div');
+    wdBadge.className = 'withdraw-badge';
+    wdBadge.id = 'withdrawBadge';
+    wdBadge.textContent = `💸 Вывод: ${result.withdrawalInfo.summary}`;
+    if (result.withdrawalInfo.address) wdBadge.title = result.withdrawalInfo.address;
+    root.append(wdBadge);
   }
 
   const meta = document.createElement('small'); meta.className = 'code-meta';
@@ -420,6 +431,14 @@ function renderSavedTotpList() {
     const row = document.createElement('div'); row.className = 'totp-saved-item';
     const info = document.createElement('span'); info.className = 'totp-saved-info';
     info.textContent = `${acc.issuer}${acc.account ? ` (${acc.account})` : ''}${acc.domain ? ` · ${acc.domain}` : ''}`;
+    const acts = document.createElement('span'); acts.className = 'totp-head-actions';
+    const qr = document.createElement('button'); qr.type = 'button'; qr.className = 'text-button';
+    qr.textContent = '📱 QR';
+    qr.title = 'Перенести на телефон';
+    qr.addEventListener('click', async () => {
+      await switchMode('auth');
+      await authController?.openQr?.(acc.id);
+    });
     const del = document.createElement('button'); del.type = 'button'; del.className = 'text-button';
     del.textContent = 'Удалить';
     del.addEventListener('click', async () => {
@@ -428,7 +447,8 @@ function renderSavedTotpList() {
         await refreshTotp();
       } catch (err) { showTotpStatus(err.message); }
     });
-    row.append(info, del);
+    acts.append(qr, del);
+    row.append(info, acts);
     list.append(row);
   }
 }
@@ -451,6 +471,25 @@ async function refreshTotp() {
     totpVault = res;
     totpSiteMatch = res.siteMatch ?? { status: 'none' };
     renderPhishingBanner(res.phishingAlert ?? fieldStatus?.phishingAlert);
+    const skewBanner = $('clockSkewBanner');
+    const uncomp = Number(res.clockState?.uncompensatedSkewSeconds) || 0;
+    if (skewBanner) {
+      if (Math.abs(uncomp) >= 20) {
+        const targetOffset = res.clockState?.detectedSkewSeconds ?? uncomp;
+        skewBanner.hidden = false;
+        if ($('clockSkewText')) {
+          $('clockSkewText').textContent = uncomp > 0
+            ? `⏱ Часы ПК отстают на ${uncomp}с`
+            : `⏱ Часы ПК спешат на ${Math.abs(uncomp)}с`;
+        }
+        if ($('clockSkewFixBtn')) {
+          $('clockSkewFixBtn').dataset.offset = String(targetOffset);
+          $('clockSkewFixBtn').textContent = `Синхронизировать (${targetOffset >= 0 ? `+${targetOffset}` : targetOffset}с)`;
+        }
+      } else {
+        skewBanner.hidden = true;
+      }
+    }
     const badge = $('authCountBadge');
     if (badge) { badge.textContent = String(res.count ?? 0); badge.hidden = !(res.count > 0); }
     $('totpLockBtn').hidden = !(res.pinProtected && res.unlocked);
@@ -525,7 +564,8 @@ function startLiveTicker() {
     }
     if (totpSiteMatch?.status === 'found' || totpSiteMatch?.status === 'choose') {
       const period = totpSiteMatch.period || 30;
-      const epochSec = Math.floor(Date.now() / 1000);
+      const offsetSec = Number(totpVault?.clockState?.offsetSeconds) || 0;
+      const epochSec = Math.floor(Date.now() / 1000) + offsetSec;
       const counter = Math.floor(epochSec / period);
       if (counter !== totpSiteMatch.counter) {
         void refreshTotp();
@@ -598,11 +638,13 @@ async function init() {
   applyI18n();
   const manifest = chrome.runtime.getManifest?.();
   if (manifest?.version && $('appVersion')) $('appVersion').textContent = manifest.version;
-  const settings = await chrome.storage.local.get(['autoWatch', 'detailedPopup', 'localWebmailEnabled', 'autoClearClipboard', 'mutedOrigins']);
+  const settings = await chrome.storage.local.get(['autoWatch', 'detailedPopup', 'localWebmailEnabled', 'autoClearClipboard', 'showWithdrawalDetails', 'mutedOrigins']);
   const { autoWatch, detailedPopup, localWebmailEnabled, autoClearClipboard, mutedOrigins } = settings ?? {};
+  showWithdrawalDetails = settings?.showWithdrawalDetails === true;
   $('localWebmailEnabled').checked = localWebmailEnabled !== false;
   $('detailedPopup').checked = detailedPopup === true;
   if ($('autoClearClipboard')) $('autoClearClipboard').checked = autoClearClipboard !== false;
+  if ($('showWithdrawalDetails')) $('showWithdrawalDetails').checked = showWithdrawalDetails;
   $('autoWatch').checked = autoWatch !== false;
   $('autoState').textContent = autoWatch === false ? 'Paused' : 'On by default';
   configureProvider();
@@ -879,6 +921,62 @@ $('detailedPopup').addEventListener('change', async () => {
 
 $('autoClearClipboard')?.addEventListener('change', async () => {
   await chrome.storage.local.set({ autoClearClipboard: $('autoClearClipboard').checked });
+});
+
+$('showWithdrawalDetails')?.addEventListener('change', async () => {
+  showWithdrawalDetails = $('showWithdrawalDetails').checked;
+  await chrome.storage.local.set({ showWithdrawalDetails });
+  if (current) showResult(current);
+});
+
+$('clockSkewFixBtn')?.addEventListener('click', async () => {
+  const offsetSeconds = Number($('clockSkewFixBtn')?.dataset?.offset ?? 0);
+  try {
+    await manageTotp({ command: 'set_time_offset', offsetSeconds });
+    showTotpStatus(`✓ Поправка времени применена (${offsetSeconds >= 0 ? `+${offsetSeconds}` : offsetSeconds}с).`, 'ok');
+    await refreshTotp();
+  } catch (err) {
+    showTotpStatus(err.message, 'err');
+  }
+});
+
+$('splitPasteBtn')?.addEventListener('click', () => {
+  const form = $('splitPasteForm');
+  if (!form) return;
+  form.hidden = !form.hidden;
+  if (!form.hidden) $('splitPasteInput')?.focus();
+});
+
+async function submitSplitCode(rawValue) {
+  if (!tab?.id || !origin?.startsWith('https://')) return;
+  const codeText = String(rawValue ?? '').trim();
+  if (!codeText) return;
+  const res = await chrome.runtime.sendMessage({
+    type: 'SPLIT_PASTE_POPUP',
+    tabId: tab.id,
+    origin,
+    code: codeText
+  }).catch(() => null);
+  if (res?.status === 'inserted') {
+    if ($('splitPasteInput')) $('splitPasteInput').value = '';
+    if ($('splitPasteForm')) $('splitPasteForm').hidden = true;
+    show('✓ Код разложен по ячейкам на странице.', false);
+  } else {
+    show(res?.message ?? 'Не удалось разложить код по ячейкам.', false);
+  }
+}
+
+$('splitPasteForm')?.addEventListener('submit', event => {
+  event.preventDefault();
+  void submitSplitCode($('splitPasteInput')?.value);
+});
+
+$('splitPasteInput')?.addEventListener('paste', event => {
+  const pasted = event.clipboardData?.getData?.('text/plain') || '';
+  if (!pasted) return;
+  event.preventDefault();
+  if ($('splitPasteInput')) $('splitPasteInput').value = pasted.trim();
+  void submitSplitCode(pasted);
 });
 
 $('search').addEventListener('click', () => { void searchLatest(); });

@@ -25,6 +25,10 @@
   let originalPadding = '';
   let reloadRequired = false;
   let detailedPopup = false;
+  let showWithdrawalDetails = false;
+  let totpTimeOffsetSeconds = 0;
+  let pastePillHost = null;
+  let pastePillTimer = null;
   let totpEnabled = false;
   let totpSiteHints = [];
   let mutedOrigins = [];
@@ -291,12 +295,18 @@
       chip.title = 'Нажмите, чтобы выбрать 2FA-аккаунт (несколько аккаунтов для сайта)';
       applyChipAppearance(false, false);
     } else if (code) {
-      chip.textContent = code;
-      const remSec = codeDetails?.timestamp
-        ? Math.max(0, Math.ceil((codeDetails.timestamp + (codeDetails.lifetimeSeconds ?? 180) * 1000 - Date.now()) / 1000))
-        : null;
-      chip.title = remSec !== null ? `Click once to insert (${formatMMSS(remSec)})` : 'Click once to insert';
-      applyChipAppearance(false, false);
+      if (showWithdrawalDetails && codeDetails?.withdrawalInfo?.summary) {
+        chip.textContent = `💸 ${code} · ${codeDetails.withdrawalInfo.summary}`;
+        chip.title = `Вывод в письме: ${codeDetails.withdrawalInfo.summary}${codeDetails.withdrawalInfo.address ? ` (${codeDetails.withdrawalInfo.address})` : ''} · Нажмите для вставки`;
+        applyChipAppearance(false, true);
+      } else {
+        chip.textContent = code;
+        const remSec = codeDetails?.timestamp
+          ? Math.max(0, Math.ceil((codeDetails.timestamp + (codeDetails.lifetimeSeconds ?? 180) * 1000 - Date.now()) / 1000))
+          : null;
+        chip.title = remSec !== null ? `Click once to insert (${formatMMSS(remSec)})` : 'Click once to insert';
+        applyChipAppearance(false, false);
+      }
     } else if (link) {
       chip.textContent = '🔗 Open';
       chip.title = `Open link: ${link.host}`;
@@ -341,7 +351,8 @@
         return;
       }
       const period = totpDetails.period || 30;
-      const epochSec = Math.floor(Date.now() / 1000);
+      const offsetSec = Number(totpDetails.timeOffsetSeconds ?? totpTimeOffsetSeconds) || 0;
+      const epochSec = Math.floor(Date.now() / 1000) + offsetSec;
       const counter = Math.floor(epochSec / period);
       if (totpDetails.counter && counter !== totpDetails.counter) {
         void refreshInlineTotp(expectedFieldId);
@@ -605,7 +616,7 @@
     label.prepend(mark);
     const dark = isDarkTheme();
     const style = document.createElement('style');
-    style.textContent = `.code-row{display:flex;align-items:center;gap:10px;margin:12px -13px 0;padding:13px;border-top:1px solid ${dark ? '#334066' : '#e5eaf4'};border-left:3px solid transparent}.code-row:first-of-type{border-left-color:#7387f4}.code-info{flex:1;min-width:0}.digits{font:800 23px/1.25 system-ui;letter-spacing:1.5px;font-variant-numeric:tabular-nums;color:${dark ? '#f2f4ff' : '#263752'}}.link-title{font:700 13px/1.35 system-ui;color:${dark ? '#f2f4ff' : '#263752'};overflow-wrap:anywhere}.latest{display:inline-block;margin-left:7px;color:${dark ? '#a6b3ff' : '#5369e8'};font:800 9px system-ui;letter-spacing:.7px;vertical-align:middle}.timer-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:${dark ? '#233052' : '#edf1ff'};color:${dark ? '#b6c3ef' : '#4056c5'};font:700 10px system-ui;font-variant-numeric:tabular-nums}.timer-badge.expired{background:${dark ? '#49252d' : '#ffecef'};color:${dark ? '#ff9eaa' : '#b42336'}}.meta{margin-top:4px;color:${dark ? '#a5b4d4' : '#738096'};font-size:11px;overflow-wrap:anywhere}.row-actions{display:flex;flex-direction:column;gap:5px;flex:none}.fill{flex:none;padding:8px 12px;border:1px solid ${dark ? '#52629b' : '#c8d1f4'};border-radius:8px;background:${dark ? '#263354' : '#edf1ff'};color:${dark ? '#e8ebff' : '#4056c5'};font:700 12px system-ui;cursor:pointer}.fill:disabled{opacity:.5;cursor:wait}.fill:focus-visible{outline:2px solid #7387f4;outline-offset:2px}.link-mini{padding:5px 8px;border:1px solid ${dark ? '#43517d' : '#d6def8'};border-radius:7px;background:transparent;color:${dark ? '#b6c3ef' : '#4a5ec9'};font:650 11px system-ui;cursor:pointer}.warning{color:${dark ? '#ffc978' : '#8b5418'};font-size:11px;margin-top:6px}.totp-box{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 0;padding:10px 11px;border:1px solid ${dark ? '#3a4b7d' : '#d4ddfb'};border-radius:10px;background:${dark ? '#1c2542' : '#f4f7ff'}}.totp-live,.totp-cand-live{font:800 18px/1.2 system-ui;letter-spacing:1.2px;font-variant-numeric:tabular-nums}.dual-cta{display:block;width:100%;margin-top:10px;padding:9px 11px;border:0;border-radius:9px;background:linear-gradient(135deg,#5b6ef5,#6d55e8);color:#fff;font:700 12px system-ui;cursor:pointer}`;
+    style.textContent = `.code-row{display:flex;align-items:center;gap:10px;margin:12px -13px 0;padding:13px;border-top:1px solid ${dark ? '#334066' : '#e5eaf4'};border-left:3px solid transparent}.code-row:first-of-type{border-left-color:#7387f4}.code-info{flex:1;min-width:0}.digits{font:800 23px/1.25 system-ui;letter-spacing:1.5px;font-variant-numeric:tabular-nums;color:${dark ? '#f2f4ff' : '#263752'}}.link-title{font:700 13px/1.35 system-ui;color:${dark ? '#f2f4ff' : '#263752'};overflow-wrap:anywhere}.latest{display:inline-block;margin-left:7px;color:${dark ? '#a6b3ff' : '#5369e8'};font:800 9px system-ui;letter-spacing:.7px;vertical-align:middle}.timer-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:${dark ? '#233052' : '#edf1ff'};color:${dark ? '#b6c3ef' : '#4056c5'};font:700 10px system-ui;font-variant-numeric:tabular-nums}.timer-badge.expired{background:${dark ? '#49252d' : '#ffecef'};color:${dark ? '#ff9eaa' : '#b42336'}}.meta{margin-top:4px;color:${dark ? '#a5b4d4' : '#738096'};font-size:11px;overflow-wrap:anywhere}.withdraw-pill{display:inline-block;margin-top:5px;padding:3px 7px;border-radius:7px;background:${dark ? '#322410' : '#fff8eb'};border:1px solid ${dark ? '#926018' : '#f3c683'};color:${dark ? '#fcd34d' : '#9a5409'};font:700 10.5px/1.35 system-ui;overflow-wrap:anywhere}.row-actions{display:flex;flex-direction:column;gap:5px;flex:none}.fill{flex:none;padding:8px 12px;border:1px solid ${dark ? '#52629b' : '#c8d1f4'};border-radius:8px;background:${dark ? '#263354' : '#edf1ff'};color:${dark ? '#e8ebff' : '#4056c5'};font:700 12px system-ui;cursor:pointer}.fill:disabled{opacity:.5;cursor:wait}.fill:focus-visible{outline:2px solid #7387f4;outline-offset:2px}.link-mini{padding:5px 8px;border:1px solid ${dark ? '#43517d' : '#d6def8'};border-radius:7px;background:transparent;color:${dark ? '#b6c3ef' : '#4a5ec9'};font:650 11px system-ui;cursor:pointer}.warning{color:${dark ? '#ffc978' : '#8b5418'};font-size:11px;margin-top:6px}.totp-box{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 0;padding:10px 11px;border:1px solid ${dark ? '#3a4b7d' : '#d4ddfb'};border-radius:10px;background:${dark ? '#1c2542' : '#f4f7ff'}}.totp-live,.totp-cand-live{font:800 18px/1.2 system-ui;letter-spacing:1.2px;font-variant-numeric:tabular-nums}.dual-cta{display:block;width:100%;margin-top:10px;padding:9px 11px;border:0;border-radius:9px;background:linear-gradient(135deg,#5b6ef5,#6d55e8);color:#fff;font:700 12px system-ui;cursor:pointer}`;
     root.append(style);
 
     if (hasTotp && totpDetails.status === 'found') {
@@ -710,6 +721,13 @@
         const hostMeta = document.createElement('div'); hostMeta.className = 'meta'; hostMeta.textContent = item.link.host; info.append(hostMeta);
       }
       if (item.accountEmail) { const account = document.createElement('div'); account.className = 'meta'; account.textContent = item.accountEmail; info.append(account); }
+      if (showWithdrawalDetails && item.withdrawalInfo?.summary) {
+        const wd = document.createElement('div');
+        wd.className = 'withdraw-pill';
+        wd.textContent = `💸 Вывод: ${item.withdrawalInfo.summary}`;
+        if (item.withdrawalInfo.address) wd.title = item.withdrawalInfo.address;
+        info.append(wd);
+      }
       if (item.requiresReview || review) { const warning = document.createElement('div'); warning.className = 'warning'; warning.textContent = `${t('inlineReview', 'Check sender and subject before inserting')}: ${item.subject || '—'}`; info.append(warning); }
       const actions = document.createElement('div'); actions.className = 'row-actions';
       const expired = remSec <= 0;
@@ -940,6 +958,7 @@
         controlRect.bottom > rect.top && controlRect.top < rect.bottom;
     });
     const inside = field.type === 'single' && field.anchor.tagName === 'INPUT' &&
+      !(showWithdrawalDetails && codeDetails?.withdrawalInfo?.summary) &&
       !rightControl && rect.width >= 150 && rect.height >= 28 && rect.right <= innerWidth && rect.left >= 0 &&
       getComputedStyle(field.anchor).direction !== 'rtl';
     if (inside) {
@@ -1223,6 +1242,100 @@
     };
   }
 
+  function closePastePill() {
+    clearTimeout(pastePillTimer);
+    pastePillTimer = null;
+    pastePillHost?.remove();
+    pastePillHost = null;
+  }
+
+  function showPasteSplitPill(group, cleanCode) {
+    closePastePill();
+    if (!group?.anchor?.isConnected || !document.documentElement) return;
+    const dark = isDarkTheme();
+    const host = document.createElement('div');
+    host.id = 'codesnap-paste-pill';
+    host.style.cssText = 'position:fixed;z-index:2147483647;font:650 12px/1.3 system-ui,sans-serif';
+    const rect = resolveVisibleAnchorRect(group.anchor);
+    host.style.left = `${Math.max(8, Math.min(innerWidth - 280, rect.right - 220))}px`;
+    host.style.top = `${rect.bottom + 42 < innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - 40)}px`;
+
+    const root = host.attachShadow({ mode: 'open' });
+    const wrap = document.createElement('div');
+    wrap.style.cssText = dark
+      ? 'display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid #4d62a3;border-radius:999px;background:#151c30f7;color:#eef2ff;box-shadow:0 8px 24px rgba(0,0,0,.55)'
+      : 'display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid #bcc9fd;border-radius:999px;background:#fffffffa;color:#243bb5;box-shadow:0 8px 24px rgba(17,28,62,.2)';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cs-split-paste-btn';
+    btn.textContent = `📋 Разложить ${cleanCode} по ячейкам`;
+    btn.style.cssText = 'border:0;background:none;padding:2px 4px;color:inherit;font:inherit;cursor:pointer;white-space:nowrap';
+    btn.addEventListener('click', async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ok = await detector.insert(group, cleanCode);
+      closePastePill();
+      if (ok) showToast(`✓ Код ${cleanCode} разложен по ${group.inputs.length} ячейкам`);
+    });
+
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.textContent = '×';
+    dismiss.setAttribute('aria-label', 'Закрыть');
+    dismiss.style.cssText = `border:0;background:none;color:${dark ? '#9aa7c7' : '#68758d'};font-size:15px;line-height:1;cursor:pointer;padding:0 3px`;
+    dismiss.addEventListener('click', closePastePill);
+
+    wrap.append(btn, dismiss);
+    root.append(wrap);
+    document.documentElement.append(host);
+    pastePillHost = host;
+    pastePillTimer = setTimeout(closePastePill, 15_000);
+    pastePillTimer?.unref?.();
+  }
+
+  async function splitInsertIntoPage(rawCode) {
+    const clean = detector.extractCleanPasteCode?.(rawCode, null) ||
+      (/^[A-Za-z0-9]{4,8}$/.test(String(rawCode ?? '').trim()) ? String(rawCode).trim() : null);
+    if (!clean) return { status: 'error', message: 'Введите или вставьте 4–8 значный код.' };
+
+    const cf = currentCustomField();
+    const all = detector.detectAll?.(document, { allow2fa: true, customField: cf }) ?? [];
+    let targetGroup = all.find(c => c.type === 'group' && c.inputs?.length === clean.length) ?? null;
+
+    if (!targetGroup) {
+      for (const el of detector.roots(document).flatMap(r => [...(r.querySelectorAll?.('input, [contenteditable="true"], [contenteditable=""]') ?? [])])) {
+        const grp = detector.findCellGroup?.(el);
+        if (grp && grp.inputs.length === clean.length) {
+          targetGroup = grp;
+          break;
+        }
+      }
+    }
+
+    if (targetGroup) {
+      const ok = await detector.insert(targetGroup, clean);
+      if (ok) {
+        closePastePill();
+        showToast(`✓ Код ${clean} разложен по ${targetGroup.inputs.length} ячейкам`);
+        return { status: 'inserted' };
+      }
+    }
+
+    const fallback = detector.detect(document, { allow2fa: true, customField: cf });
+    if (fallback && await detector.insert(fallback, clean)) {
+      closePastePill();
+      showToast(`✓ Код ${clean} вставлен`);
+      return { status: 'inserted' };
+    }
+    if (await forceInsertIntoActiveElement(clean)) {
+      closePastePill();
+      showToast(`✓ Код ${clean} вставлен`);
+      return { status: 'inserted' };
+    }
+    return { status: 'missing', message: 'Не найдено подходящих ячеек для этого кода.' };
+  }
+
   async function forceInsertIntoActiveElement(value) {
     let active = document.activeElement;
     while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
@@ -1354,6 +1467,11 @@
       void forceInsertIntoActiveElement(request.code).then(ok => respond({ status: ok ? 'inserted' : 'no_active_input' }));
       return true;
     }
+    if (request.type === 'INSERT_SPLIT_CODE') {
+      if (request.origin && request.origin !== location.origin) { respond({ status: 'changed' }); return; }
+      void splitInsertIntoPage(request.code).then(respond, () => respond({ status: 'error', message: 'Не удалось разложить код по ячейкам.' }));
+      return true;
+    }
     if (request.type === 'INSERT_TOTP') {
       if (request.origin && request.origin !== location.origin) { respond({ status: 'changed' }); return; }
       const cf = currentCustomField();
@@ -1422,9 +1540,9 @@
   const observer = new MutationObserver(records => {
     const relevant = records.some(record => {
       const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-      if (target === chip || target?.closest?.('#codesnap-inline-panel,#codesnap-sniper-overlay,#codesnap-picker-bar,#codesnap-picker-highlight') || target?.getRootNode?.().host?.id === 'codesnap-inline-panel' || target?.getRootNode?.().host?.id === 'codesnap-sniper-overlay' || target?.getRootNode?.().host?.id === 'codesnap-picker-bar' || target?.id === 'codesnap-toast') return false;
+      if (target === chip || target?.closest?.('#codesnap-inline-panel,#codesnap-sniper-overlay,#codesnap-picker-bar,#codesnap-picker-highlight,#codesnap-paste-pill') || target?.getRootNode?.().host?.id === 'codesnap-inline-panel' || target?.getRootNode?.().host?.id === 'codesnap-sniper-overlay' || target?.getRootNode?.().host?.id === 'codesnap-picker-bar' || target?.getRootNode?.().host?.id === 'codesnap-paste-pill' || target?.id === 'codesnap-toast') return false;
       return record.type === 'attributes' || record.type === 'characterData' || [...record.addedNodes, ...record.removedNodes].some(node =>
-        node.nodeType === 1 && !/^(?:codesnap-inline-panel|codesnap-toast|codesnap-sniper-overlay|codesnap-picker-bar|codesnap-picker-highlight)$/.test(node.id) && (node.matches?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="verify" i],[class*="confirm" i],[class*="auth" i],[class*="otp" i],[class*="code" i],[class*="modal" i]') || node.querySelector?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="auth" i],[class*="otp" i],[class*="code" i]') || node.shadowRoot));
+        node.nodeType === 1 && !/^(?:codesnap-inline-panel|codesnap-toast|codesnap-sniper-overlay|codesnap-picker-bar|codesnap-picker-highlight|codesnap-paste-pill)$/.test(node.id) && (node.matches?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="verify" i],[class*="confirm" i],[class*="auth" i],[class*="otp" i],[class*="code" i],[class*="modal" i]') || node.querySelector?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="auth" i],[class*="otp" i],[class*="code" i]') || node.shadowRoot));
     });
     if (!relevant) return;
     clearTimeout(debounceTimer);
@@ -1482,9 +1600,29 @@
     }
   }, true);
   document.addEventListener('change', captureLoginEmail, true);
+  document.addEventListener('paste', event => {
+    if (reloadRequired || isOriginMuted() || phishingAlert?.suspicious) return;
+    const group = detector.findCellGroup?.(event.target);
+    if (!group) return;
+    const rawText = event.clipboardData?.getData?.('text/plain') || event.clipboardData?.getData?.('text') || '';
+    const cleanCode = detector.extractCleanPasteCode?.(rawText, group.inputs.length);
+    if (!cleanCode) return;
+    setTimeout(() => {
+      if (!document.defaultView || !group.inputs.every(el => el.isConnected)) return;
+      const alreadySplit = group.inputs.every((el, idx) => {
+        const v = el.tagName === 'INPUT' ? (el.value ?? '') : (el.textContent ?? '').trim();
+        return v === cleanCode[idx];
+      });
+      if (alreadySplit) {
+        closePastePill();
+        return;
+      }
+      showPasteSplitPill(group, cleanCode);
+    }, 25);
+  }, false);
   addEventListener('scroll', position, { passive: true });
   addEventListener('resize', position);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') closePanel(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closePanel(); closePastePill(); } });
   document.addEventListener('pointerdown', event => { if (panel && !event.composedPath().includes(panel) && event.target !== chip) closePanel(); }, true);
   function collectVisualsInRect(selRect) {
     const urls = [];
@@ -1700,8 +1838,10 @@
     };
   }
 
-  chrome.storage.local.get(['autoWatch', 'detailedPopup', 'totpEnabled', 'totpSiteHints', 'mutedOrigins', 'phishingTrustedOrigins', 'customFieldSelectors']).then(settings => {
+  chrome.storage.local.get(['autoWatch', 'detailedPopup', 'showWithdrawalDetails', 'totpTimeOffsetSeconds', 'totpEnabled', 'totpSiteHints', 'mutedOrigins', 'phishingTrustedOrigins', 'customFieldSelectors']).then(settings => {
     detailedPopup = settings.detailedPopup === true;
+    showWithdrawalDetails = settings.showWithdrawalDetails === true;
+    totpTimeOffsetSeconds = Number(settings.totpTimeOffsetSeconds) || 0;
     totpEnabled = settings.totpEnabled === true;
     totpSiteHints = Array.isArray(settings.totpSiteHints) ? settings.totpSiteHints : [];
     mutedOrigins = Array.isArray(settings.mutedOrigins) ? settings.mutedOrigins : [];
@@ -1713,6 +1853,18 @@
     if (contextInvalidated(error)) showReloadRequired();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.showWithdrawalDetails) {
+      showWithdrawalDetails = changes.showWithdrawalDetails.newValue === true;
+      updateChipDisplay();
+      position();
+      if (detailedPopup && panel?.dataset.kind === 'codes') showCodePanel();
+    }
+    if (area === 'local' && changes.totpTimeOffsetSeconds) {
+      totpTimeOffsetSeconds = Number(changes.totpTimeOffsetSeconds.newValue) || 0;
+      totpDetails = null;
+      stopTotpTimer();
+      paint();
+    }
     if (area === 'local' && changes.totpEnabled) {
       totpEnabled = changes.totpEnabled.newValue === true;
       paint();

@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.2.0</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.3.0</span></div>
     <p data-i18n="tagline">Your email codes &amp; activation links, 100% locally.</p>
   </header>
 
@@ -36,9 +36,14 @@
       <div class="site-actions-row">
         <button class="text-button" id="pickFieldBtn" type="button">🎯 Указать поле</button>
         <button class="text-button" id="clearPickedFieldBtn" type="button" hidden>× Сбросить поле</button>
+        <button class="text-button" id="splitPasteBtn" type="button" hidden>📋 По ячейкам</button>
         <button class="text-button" id="toggleMuteSite" type="button" hidden></button>
         <span class="hotkey-hint" id="hotkeyHint" title="Быстрая вставка кода">Alt+Shift+V</span>
       </div>
+      <form id="splitPasteForm" class="split-paste-form" hidden>
+        <input id="splitPasteInput" autocomplete="off" placeholder="Вставьте 4–8 значный код (Ctrl+V)…">
+        <button class="secondary" id="splitPasteSubmit" type="submit">Разложить</button>
+      </form>
     </section>
 
     <section class="card totp-card" aria-labelledby="totpTitle">
@@ -53,6 +58,7 @@
       </div>
       <div id="totpResult" class="totp-result"></div>
       <p class="totp-status" id="totpStatus" role="status" aria-live="polite" hidden></p>
+      <div class="clock-skew-banner" id="clockSkewBanner" hidden><span id="clockSkewText"></span><button class="text-button" id="clockSkewFixBtn" type="button">Синхронизировать</button></div>
       <form id="totpUnlockForm" class="mail-form" hidden>
         <label class="sr-only" for="totpPinInput">PIN / Master password</label>
         <input id="totpPinInput" type="password" autocomplete="off" placeholder="PIN / Мастер-пароль">
@@ -127,6 +133,7 @@
         <label class="setting-check"><input id="localWebmailEnabled" type="checkbox" checked><span><strong data-i18n="localWebmailTitle">Local webmail tabs</strong><small data-i18n="localWebmailDescription">Read recent codes and activation links locally from open Yandex, Outlook, Yahoo, Mail.ru, Proton, iCloud, Zoho, Rambler, Fastmail, AOL and GMX tabs without passwords.</small></span></label>
         <label class="setting-check"><input id="detailedPopup" type="checkbox"><span><strong data-i18n="detailedPopupTitle">Detailed popup</strong><small data-i18n="detailedPopupDescription">Show code, link, sender, account and time beside the field.</small></span></label>
         <label class="setting-check"><input id="autoClearClipboard" type="checkbox" checked><span><strong data-i18n="autoClearTitle">Auto-clear clipboard</strong><small data-i18n="autoClearDescription">Clear copied verification codes from clipboard after 45 seconds.</small></span></label>
+        <label class="setting-check"><input id="showWithdrawalDetails" type="checkbox"><span><strong data-i18n="withdrawCheckTitle">Withdrawal details check</strong><small data-i18n="withdrawCheckDescription">Show amount and wallet address from withdrawal emails beside the code to protect against address tampering.</small></span></label>
       </details>
     </section>
 

@@ -253,5 +253,11 @@
   },
   "inlineExpiredShort": {
     "message": "Истёк"
+  },
+  "withdrawCheckTitle": {
+    "message": "Показывать сумму и кошелёк вывода (Withdraw Check)"
+  },
+  "withdrawCheckDescription": {
+    "message": "Подсвечивает сумму и края адреса кошелька из письма на вывод рядом с кодом для быстрой сверки перед вставкой."
   }
 }

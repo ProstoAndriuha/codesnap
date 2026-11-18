@@ -73,6 +73,11 @@ export async function mountAuthenticatorView(container, options = {}) {
   let editingId = null;
   let pinProtected = false;
   let vaultLocked = false;
+  let clockState = { offsetSeconds: 0, detectedSkewSeconds: null, detectedSkewAt: null, uncompensatedSkewSeconds: 0 };
+  let activeQrId = null;
+  let activeQrUri = '';
+  let qrAutoHideTimer = null;
+  let qrSvgFactory = null;
   let lastCounterKey = '';
   let statusMsg = '';
   let statusTone = 'info';
@@ -103,7 +108,13 @@ export async function mountAuthenticatorView(container, options = {}) {
   pinBtn.title = 'PIN / Заблокировать 2FA';
   pinBtn.textContent = '🔒';
 
-  leftBtns.append(importBtn, pinBtn);
+  const clockBtn = document.createElement('button');
+  clockBtn.type = 'button';
+  clockBtn.className = 'auth-icon-btn';
+  clockBtn.title = 'Точное время и автопоправка сдвига 2FA';
+  clockBtn.textContent = '⏱';
+
+  leftBtns.append(importBtn, pinBtn, clockBtn);
 
   const title = document.createElement('div');
   title.className = 'auth-bar-title';
@@ -163,10 +174,14 @@ export async function mountAuthenticatorView(container, options = {}) {
   statusEl.className = 'totp-status';
   statusEl.hidden = true;
 
-  // Phishing alert banner + Collapsible drawer
+  // Phishing alert banner + Clock skew banner + Collapsible drawer
   const phishBanner = document.createElement('div');
   phishBanner.className = 'phishing-banner';
   phishBanner.hidden = true;
+
+  const clockBanner = document.createElement('div');
+  clockBanner.className = 'clock-skew-banner';
+  clockBanner.hidden = true;
 
   const drawer = document.createElement('div');
   drawer.className = 'auth-drawer';
@@ -176,7 +191,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   const listEl = document.createElement('div');
   listEl.className = 'auth-list';
 
-  root.append(bar, searchWrap, statusEl, phishBanner, drawer, listEl);
+  root.append(bar, searchWrap, statusEl, phishBanner, clockBanner, drawer, listEl);
   container.append(root);
 
   function setStatus(msg, tone = 'info') {
@@ -376,6 +391,83 @@ export async function mountAuthenticatorView(container, options = {}) {
       return;
     }
 
+    if (drawerMode === 'clock') {
+      const box = document.createElement('div');
+      box.className = 'auth-form';
+
+      const heading = document.createElement('strong');
+      heading.className = 'auth-drawer-title';
+      heading.textContent = 'Точное время 2FA (сдвиг часов)';
+
+      const off = Number(clockState?.offsetSeconds) || 0;
+      const detected = clockState?.detectedSkewSeconds;
+      const info = document.createElement('p');
+      info.className = 'subtle';
+      info.textContent = `Текущая поправка: ${off >= 0 ? `+${off}` : off}с.` +
+        (detected !== null && detected !== undefined
+          ? ` Последняя проверка сервера: часы ПК ${detected > 0 ? `отстают на ${detected}с` : detected < 0 ? `спешат на ${Math.abs(detected)}с` : 'идут точно'}.`
+          : ' Если коды 2FA не подходят на сайте, проверьте синхронизацию часов Windows.');
+
+      const syncBtn = document.createElement('button');
+      syncBtn.type = 'button';
+      syncBtn.className = 'secondary full-btn';
+      syncBtn.textContent = '🔄 Проверить точное время и синхронизировать';
+      syncBtn.addEventListener('click', async () => {
+        syncBtn.disabled = true;
+        try {
+          const res = await sendTotpAction({ command: 'check_clock_skew', autoApply: true });
+          const nextOff = Number(res.offsetSeconds) || 0;
+          setStatus(
+            nextOff === 0
+              ? '✓ Часы ПК идут точно (поправка 0с).'
+              : `✓ Поправка времени применена: ${nextOff > 0 ? `+${nextOff}` : nextOff}с`,
+            'ok'
+          );
+          await refreshList();
+        } catch (err) {
+          setStatus(err.message, 'err');
+        } finally {
+          syncBtn.disabled = false;
+        }
+      });
+
+      const manualRow = document.createElement('div');
+      manualRow.className = 'auth-clock-manual';
+      const offIn = document.createElement('input');
+      offIn.type = 'number';
+      offIn.min = '-86400';
+      offIn.max = '86400';
+      offIn.value = String(off);
+      offIn.placeholder = 'Сдвиг (сек)';
+      const saveOffBtn = document.createElement('button');
+      saveOffBtn.type = 'button';
+      saveOffBtn.className = 'secondary';
+      saveOffBtn.textContent = 'Применить';
+      saveOffBtn.addEventListener('click', async () => {
+        try {
+          await sendTotpAction({ command: 'set_time_offset', offsetSeconds: Number(offIn.value) || 0 });
+          setStatus(`✓ Поправка времени: ${Number(offIn.value) || 0}с`, 'ok');
+          await refreshList();
+        } catch (err) {
+          setStatus(err.message, 'err');
+        }
+      });
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'text-button';
+      resetBtn.textContent = 'Сброс (0с)';
+      resetBtn.addEventListener('click', async () => {
+        await sendTotpAction({ command: 'set_time_offset', offsetSeconds: 0 });
+        setStatus('Поправка времени сброшена на 0с.', 'ok');
+        await refreshList();
+      });
+
+      manualRow.append(offIn, saveOffBtn, resetBtn);
+      box.append(heading, info, syncBtn, manualRow);
+      drawer.append(box);
+      return;
+    }
+
     if (drawerMode === 'pin') {
       const box = document.createElement('div');
       box.className = 'auth-form';
@@ -420,7 +512,9 @@ export async function mountAuthenticatorView(container, options = {}) {
       setStatus(`⚠️ Вставка заблокирована: ${phishingAlert.hostname} похож на фишинговый клон ${phishingAlert.targetDomain}.`, 'err');
       return;
     }
-    const remSec = (item.period || 30) - (((Math.floor(Date.now() / 1000) % (item.period || 30)) + (item.period || 30)) % (item.period || 30));
+    const offsetSec = Number(clockState?.offsetSeconds) || 0;
+    const epochNowSec = Math.floor(Date.now() / 1000) + offsetSec;
+    const remSec = (item.period || 30) - (((epochNowSec % (item.period || 30)) + (item.period || 30)) % (item.period || 30));
     if (activeTab?.id && (item.isCurrentSite || has2faField) && activeOrigin.startsWith('https://')) {
       try {
         if (remSec <= 3) setStatus('⏳ Осталось ≤3с — ждём свежий 30-сек код…', 'info');
@@ -465,6 +559,38 @@ export async function mountAuthenticatorView(container, options = {}) {
     }
   }
 
+  function hideQrPreview() {
+    clearTimeout(qrAutoHideTimer);
+    qrAutoHideTimer = null;
+    activeQrId = null;
+    activeQrUri = '';
+  }
+
+  async function openQrTransfer(id) {
+    if (!id) return;
+    if (activeQrId === id) {
+      hideQrPreview();
+      renderList();
+      return;
+    }
+    try {
+      const res = await sendTotpAction({ command: 'export_uri', id });
+      const { createQrSvgElement } = await import('./qr-generator.js');
+      qrSvgFactory = createQrSvgElement;
+      activeQrId = id;
+      activeQrUri = res.uri;
+      clearTimeout(qrAutoHideTimer);
+      qrAutoHideTimer = setTimeout(() => {
+        hideQrPreview();
+        if (root.isConnected) renderList();
+      }, 60_000);
+      qrAutoHideTimer?.unref?.();
+      renderList();
+    } catch (err) {
+      setStatus(err.message, 'err');
+    }
+  }
+
   function renderList() {
     listEl.replaceChildren();
     if (vaultLocked) return;
@@ -484,7 +610,7 @@ export async function mountAuthenticatorView(container, options = {}) {
       return;
     }
 
-    const epochSec = Math.floor(Date.now() / 1000);
+    const epochSec = Math.floor(Date.now() / 1000) + (Number(clockState?.offsetSeconds) || 0);
     for (const item of filtered) {
       const period = item.period || 30;
       const rem = period - (((epochSec % period) + period) % period);
@@ -558,9 +684,45 @@ export async function mountAuthenticatorView(container, options = {}) {
       pieWrap.className = 'auth-pie-wrap';
       pieWrap.setAttribute('data-pie-id', item.id);
       pieWrap.append(createPieSvg(rem, period));
-      bottomRow.append(acctSpan, pieWrap);
+
+      const qrBtn = document.createElement('button');
+      qrBtn.type = 'button';
+      qrBtn.className = `auth-qr-btn${activeQrId === item.id ? ' active' : ''}`;
+      qrBtn.title = 'Перенести на телефон (QR-код)';
+      qrBtn.setAttribute('aria-label', `Показать QR-код для ${item.issuer}`);
+      qrBtn.textContent = '📱';
+      qrBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        void openQrTransfer(item.id);
+      });
+
+      const rightRow = document.createElement('span');
+      rightRow.className = 'auth-tile-right';
+      rightRow.append(qrBtn, pieWrap);
+      bottomRow.append(acctSpan, rightRow);
 
       card.append(topRow, codeRow, bottomRow);
+
+      if (activeQrId === item.id && activeQrUri && qrSvgFactory) {
+        const qrBox = document.createElement('div');
+        qrBox.className = 'auth-qr-box';
+        qrBox.addEventListener('click', e => e.stopPropagation());
+        const svgEl = qrSvgFactory(document, activeQrUri, { className: 'auth-qr-svg' });
+        const qrHint = document.createElement('p');
+        qrHint.className = 'auth-qr-hint';
+        qrHint.textContent = 'Отсканируйте камерой Google Authenticator / 2FAS на телефоне. Не показывайте экран посторонним.';
+        const closeQrBtn = document.createElement('button');
+        closeQrBtn.type = 'button';
+        closeQrBtn.className = 'text-button';
+        closeQrBtn.textContent = 'Скрыть QR';
+        closeQrBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          hideQrPreview();
+          renderList();
+        });
+        qrBox.append(svgEl, qrHint, closeQrBtn);
+        card.append(qrBox);
+      }
 
       if (editMode && editingId === item.id) {
         const inlineEdit = document.createElement('form');
@@ -616,6 +778,31 @@ export async function mountAuthenticatorView(container, options = {}) {
     phishBanner.append(msg, trust);
   }
 
+  function renderClockBanner() {
+    clockBanner.replaceChildren();
+    const uncomp = Number(clockState?.uncompensatedSkewSeconds) || 0;
+    if (Math.abs(uncomp) < 20) {
+      clockBanner.hidden = true;
+      return;
+    }
+    clockBanner.hidden = false;
+    const msg = document.createElement('span');
+    msg.textContent = uncomp > 0
+      ? `⏱ Часы ПК отстают на ${uncomp}с — коды 2FA могут не подходить.`
+      : `⏱ Часы ПК спешат на ${Math.abs(uncomp)}с — коды 2FA могут не подходить.`;
+    const fixBtn = document.createElement('button');
+    fixBtn.type = 'button';
+    fixBtn.className = 'text-button';
+    const targetOffset = clockState.detectedSkewSeconds ?? uncomp;
+    fixBtn.textContent = `Синхронизировать (${targetOffset >= 0 ? `+${targetOffset}` : targetOffset}с)`;
+    fixBtn.addEventListener('click', async () => {
+      await sendTotpAction({ command: 'set_time_offset', offsetSeconds: targetOffset });
+      setStatus(`✓ Поправка времени 2FA применена: ${targetOffset >= 0 ? `+${targetOffset}` : targetOffset}с`, 'ok');
+      await refreshList();
+    });
+    clockBanner.append(msg, fixBtn);
+  }
+
   async function refreshList() {
     try {
       const res = await sendTotpAction({
@@ -627,10 +814,14 @@ export async function mountAuthenticatorView(container, options = {}) {
       pinProtected = Boolean(res.pinProtected);
       vaultLocked = Boolean(res.vaultLocked);
       phishingAlert = res.phishingAlert ?? { suspicious: false };
+      clockState = res.clockState ?? { offsetSeconds: Number(res.timeOffsetSeconds) || 0, detectedSkewSeconds: null, uncompensatedSkewSeconds: 0 };
+      clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
       items = Array.isArray(res.items) ? res.items : [];
-      lastCounterKey = items.map(it => `${it.id}:${Math.floor(Date.now() / 1000 / (it.period || 30))}`).join(',');
+      const epochSec = Math.floor(Date.now() / 1000) + (Number(clockState?.offsetSeconds) || 0);
+      lastCounterKey = items.map(it => `${it.id}:${Math.floor(epochSec / (it.period || 30))}`).join(',');
       options.onCountChange?.(res.count ?? items.length);
       renderPhishingBanner();
+      renderClockBanner();
       renderDrawer();
       renderList();
     } catch (err) {
@@ -640,14 +831,22 @@ export async function mountAuthenticatorView(container, options = {}) {
 
   importBtn.addEventListener('click', () => {
     drawerMode = drawerMode === 'import' ? null : 'import';
+    clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
     renderDrawer();
   });
   addBtn.addEventListener('click', () => {
     drawerMode = drawerMode === 'add' ? null : 'add';
+    clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
     renderDrawer();
   });
   pinBtn.addEventListener('click', () => {
     drawerMode = drawerMode === 'pin' ? null : 'pin';
+    clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
+    renderDrawer();
+  });
+  clockBtn.addEventListener('click', () => {
+    drawerMode = drawerMode === 'clock' ? null : 'clock';
+    clockBtn.classList.toggle('active', drawerMode === 'clock' || Number(clockState.offsetSeconds) !== 0);
     renderDrawer();
   });
   editBtn.addEventListener('click', () => {
@@ -718,7 +917,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   ticker = setInterval(() => {
     if (!root.isConnected || !document.defaultView) { clearInterval(ticker); return; }
     if (vaultLocked || !items.length) return;
-    const epochSec = Math.floor(Date.now() / 1000);
+    const epochSec = Math.floor(Date.now() / 1000) + (Number(clockState?.offsetSeconds) || 0);
     const key = items.map(it => `${it.id}:${Math.floor(epochSec / (it.period || 30))}`).join(',');
     if (key !== lastCounterKey) {
       void refreshList();
@@ -738,6 +937,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   return {
     refresh: refreshList,
     openImport() { drawerMode = 'import'; renderDrawer(); },
+    openQr(id) { return openQrTransfer(id); },
     setContext(next) {
       activeTab = next.tab ?? activeTab;
       activeOrigin = next.origin ?? activeOrigin;
@@ -747,6 +947,7 @@ export async function mountAuthenticatorView(container, options = {}) {
     },
     destroy() {
       clearInterval(ticker);
+      clearTimeout(qrAutoHideTimer);
       document.removeEventListener('keydown', onKeyDown);
     }
   };

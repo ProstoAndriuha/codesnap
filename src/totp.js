@@ -2,6 +2,71 @@ import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity, matchesMaskedEmail, chec
 
 export const TOTP_GRACE_SECONDS = 3;
 
+export function normalizeClockOffset(raw) {
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(-86_400, Math.min(86_400, Math.round(num)));
+}
+
+export async function getTotpClockState() {
+  const data = (await chrome?.storage?.local?.get?.([
+    'totpTimeOffsetSeconds',
+    'detectedClockSkewSec',
+    'detectedClockSkewAt'
+  ])) ?? {};
+  const offsetSeconds = normalizeClockOffset(data.totpTimeOffsetSeconds);
+  const rawSkew = data.detectedClockSkewSec;
+  const detectedSkewSeconds = Number.isFinite(Number(rawSkew)) && rawSkew !== null ? normalizeClockOffset(rawSkew) : null;
+  const detectedSkewAt = Number.isFinite(Number(data.detectedClockSkewAt)) ? Number(data.detectedClockSkewAt) : null;
+  const uncompensatedSkewSeconds = detectedSkewSeconds === null
+    ? 0
+    : Math.abs(detectedSkewSeconds - offsetSeconds) >= 20
+      ? detectedSkewSeconds - offsetSeconds
+      : 0;
+  return {
+    offsetSeconds,
+    detectedSkewSeconds,
+    detectedSkewAt,
+    uncompensatedSkewSeconds
+  };
+}
+
+export async function setTotpTimeOffset(offsetSeconds) {
+  const clean = normalizeClockOffset(offsetSeconds);
+  await chrome?.storage?.local?.set?.({ totpTimeOffsetSeconds: clean });
+  return getTotpClockState();
+}
+
+export async function measureServerClockSkew({ autoApply = false, fetchFn = globalThis.fetch } = {}) {
+  if (typeof fetchFn !== 'function') throw new Error('CLOCK_CHECK_FAILED');
+  let response = null;
+  let t0 = Date.now();
+  let t1 = t0;
+  for (const method of ['HEAD', 'GET']) {
+    t0 = Date.now();
+    try {
+      const res = await fetchFn('https://oauth2.googleapis.com/tokeninfo', { method, cache: 'no-store' });
+      t1 = Date.now();
+      if (res?.headers?.get?.('Date') || res?.headers?.get?.('date')) {
+        response = res;
+        break;
+      }
+      response = res;
+    } catch { /* try next method */ }
+  }
+  const dateHeader = response?.headers?.get?.('Date') || response?.headers?.get?.('date');
+  const serverMs = dateHeader ? Date.parse(dateHeader) : NaN;
+  if (!Number.isFinite(serverMs)) throw new Error('CLOCK_CHECK_FAILED');
+  const midpoint = Math.round((t0 + t1) / 2);
+  const skewSeconds = normalizeClockOffset(Math.round((serverMs - midpoint) / 1000));
+  const payload = { detectedClockSkewSec: skewSeconds, detectedClockSkewAt: t1 };
+  if (autoApply) {
+    payload.totpTimeOffsetSeconds = Math.abs(skewSeconds) <= 2 ? 0 : skewSeconds;
+  }
+  await chrome?.storage?.local?.set?.(payload);
+  return { ok: true, skewSeconds, ...(await getTotpClockState()) };
+}
+
 export async function awaitFreshTotpResult(getterFn, {
   graceSeconds = TOTP_GRACE_SECONDS,
   sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms)),
@@ -11,7 +76,9 @@ export async function awaitFreshTotpResult(getterFn, {
   const first = await getterFn(now);
   if (!first || first.status !== 'found') return first;
   const periodMs = (first.period || 30) * 1000;
-  const remMs = periodMs - (((now % periodMs) + periodMs) % periodMs);
+  const offsetMs = (Number(first.timeOffsetSeconds) || 0) * 1000;
+  const effectiveNow = now + offsetMs;
+  const remMs = periodMs - (((effectiveNow % periodMs) + periodMs) % periodMs);
   if (first.remainingSeconds > graceSeconds && remMs > graceSeconds * 1000) {
     return { ...first, waitedForNextWindow: false };
   }
@@ -499,8 +566,9 @@ function buildHint(entry) {
 }
 
 async function readVaultAndKey() {
-  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
-  if (!totpVault) return { vault: null, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key: null, entries: [] };
+  const { totpVault = null, totpSiteHints = [], totpTimeOffsetSeconds = 0 } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'totpTimeOffsetSeconds']);
+  const offsetSeconds = normalizeClockOffset(totpTimeOffsetSeconds);
+  if (!totpVault) return { vault: null, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key: null, entries: [], offsetSeconds };
   if (totpVault.mode === 'pin') {
     const session = (await chrome.storage.session?.get?.('totpSessionKey')) ?? {};
     if (!session.totpSessionKey) {
@@ -508,11 +576,11 @@ async function readVaultAndKey() {
     }
     const key = await importRawAesKey(fromBase64(session.totpSessionKey));
     const entries = await decryptEntries(totpVault, key);
-    return { vault: totpVault, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key, entries };
+    return { vault: totpVault, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key, entries, offsetSeconds };
   }
   const key = await importRawAesKey(fromBase64(totpVault.localKey));
   const entries = await decryptEntries(totpVault, key);
-  return { vault: totpVault, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key, entries };
+  return { vault: totpVault, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key, entries, offsetSeconds };
 }
 
 async function saveVaultEntries(entries, existingVault) {
@@ -770,14 +838,16 @@ function scoreCandidateAccountMatch(entry, hint, siteContext = {}) {
 }
 
 export async function getTotpCandidatesForSite(origin, siteContext = {}, now = Date.now()) {
-  const { totpVault = null, totpSiteHints = [], phishingTrustedOrigins = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'phishingTrustedOrigins']);
+  const { totpVault = null, totpSiteHints = [], phishingTrustedOrigins = [], totpTimeOffsetSeconds = 0 } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'phishingTrustedOrigins', 'totpTimeOffsetSeconds']);
+  const offsetSeconds = normalizeClockOffset(totpTimeOffsetSeconds);
+  const effectiveNow = Number(now) + offsetSeconds * 1000;
   const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
   const mergedCtx = {
     ...siteContext,
     phishingTrustedOrigins: Array.isArray(siteContext.phishingTrustedOrigins) ? siteContext.phishingTrustedOrigins : phishingTrustedOrigins
   };
   const matched = matchAllTotpHintsForSite(hints, origin, mergedCtx);
-  if (!matched.length || !totpVault) return { status: 'none', candidates: [] };
+  if (!matched.length || !totpVault) return { status: 'none', candidates: [], timeOffsetSeconds: offsetSeconds };
 
   let entries;
   try {
@@ -785,16 +855,16 @@ export async function getTotpCandidatesForSite(origin, siteContext = {}, now = D
     entries = state.entries;
   } catch (error) {
     if (error.message === 'TOTP_LOCKED') {
-      return { status: 'locked', account: matched[0].hint, count: matched.length, candidates: [] };
+      return { status: 'locked', account: matched[0].hint, count: matched.length, candidates: [], timeOffsetSeconds: offsetSeconds };
     }
-    return { status: 'none', candidates: [] };
+    return { status: 'none', candidates: [], timeOffsetSeconds: offsetSeconds };
   }
 
   const candidates = [];
   for (const { hint, siteScore } of matched) {
     const entry = entries.find(item => item.id === hint.id);
     if (!entry) continue;
-    const generated = await generateTotpCode(entry, now);
+    const generated = await generateTotpCode(entry, effectiveNow);
     const accountEmail = hint.accountEmail || extractAccountEmail(entry.account, entry.issuer);
     const accountMatchScore = scoreCandidateAccountMatch(entry, { ...hint, accountEmail }, siteContext);
     candidates.push({
@@ -805,11 +875,12 @@ export async function getTotpCandidatesForSite(origin, siteContext = {}, now = D
       domain: entry.domain ?? '',
       siteScore,
       accountMatchScore,
+      timeOffsetSeconds: offsetSeconds,
       ...generated
     });
   }
 
-  if (!candidates.length) return { status: 'none', candidates: [] };
+  if (!candidates.length) return { status: 'none', candidates: [], timeOffsetSeconds: offsetSeconds };
   candidates.sort((a, b) => (b.accountMatchScore - a.accountMatchScore) || (b.siteScore - a.siteScore));
 
   if (candidates.length === 1) {
@@ -824,7 +895,8 @@ export async function getTotpCandidatesForSite(origin, siteContext = {}, now = D
     candidates,
     remainingSeconds: candidates[0].remainingSeconds,
     period: candidates[0].period,
-    counter: candidates[0].counter
+    counter: candidates[0].counter,
+    timeOffsetSeconds: offsetSeconds
   };
 }
 
@@ -833,7 +905,9 @@ export async function getTotpForSite(origin, siteContext = {}, now = Date.now())
 }
 
 export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date.now()) {
-  const { totpVault = null, totpSiteHints = [], phishingTrustedOrigins = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'phishingTrustedOrigins']);
+  const { totpVault = null, totpSiteHints = [], phishingTrustedOrigins = [], totpTimeOffsetSeconds = 0 } = await chrome.storage.local.get(['totpVault', 'totpSiteHints', 'phishingTrustedOrigins', 'totpTimeOffsetSeconds']);
+  const offsetSeconds = normalizeClockOffset(totpTimeOffsetSeconds);
+  const effectiveNow = Number(now) + offsetSeconds * 1000;
   const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
   const pinProtected = totpVault?.mode === 'pin';
   let entries;
@@ -842,9 +916,9 @@ export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date
     entries = state.entries;
   } catch (error) {
     if (error.message === 'TOTP_LOCKED') {
-      return { status: 'locked', pinProtected: true, count: hints.length, items: [] };
+      return { status: 'locked', pinProtected: true, count: hints.length, items: [], timeOffsetSeconds: offsetSeconds };
     }
-    return { status: 'ok', pinProtected: false, count: 0, items: [] };
+    return { status: 'ok', pinProtected: false, count: 0, items: [], timeOffsetSeconds: offsetSeconds };
   }
 
   const mergedCtx = {
@@ -859,7 +933,7 @@ export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date
     const isCurrentSite = siteScore >= 6;
     const accountEmail = hint?.accountEmail || extractAccountEmail(entry.account, entry.issuer);
     const accountMatchScore = isCurrentSite ? scoreCandidateAccountMatch(entry, { accountEmail }, siteContext) : 0;
-    const generated = await generateTotpCode(entry, now);
+    const generated = await generateTotpCode(entry, effectiveNow);
     items.push({
       id: entry.id,
       issuer: entry.issuer,
@@ -869,6 +943,7 @@ export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date
       isCurrentSite,
       siteScore,
       accountMatchScore,
+      timeOffsetSeconds: offsetSeconds,
       ...generated
     });
   }
@@ -880,7 +955,7 @@ export async function listAllTotpCodes(origin = '', siteContext = {}, now = Date
     String(a.issuer).localeCompare(String(b.issuer))
   );
 
-  return { status: 'ok', pinProtected, unlocked: true, count: items.length, items };
+  return { status: 'ok', pinProtected, unlocked: true, count: items.length, items, timeOffsetSeconds: offsetSeconds };
 }
 
 function parseImportItems(rawText, fallback = {}) {
@@ -1043,6 +1118,32 @@ export async function importTotpPayload(rawText, fallback = {}, now = Date.now()
   return { ok: true, imported, updated, total: nextEntries.length };
 }
 
+export function buildOtpAuthUri(entry) {
+  const issuer = String(entry?.issuer || 'Account').trim();
+  const account = String(entry?.account || '').trim();
+  const label = account ? `${issuer}:${account}` : issuer;
+  const params = new URLSearchParams({
+    secret: entry.secret,
+    issuer,
+    algorithm: entry.algorithm || 'SHA1',
+    digits: String(entry.digits || 6),
+    period: String(entry.period || 30)
+  });
+  return `otpauth://totp/${encodeURIComponent(label)}?${params.toString()}`;
+}
+
+export async function exportTotpAccountUri(id) {
+  const { entries } = await readVaultAndKey();
+  const entry = entries.find(item => item.id === id);
+  if (!entry) throw new Error('TOTP_NOT_FOUND');
+  return {
+    id: entry.id,
+    issuer: entry.issuer,
+    account: entry.account ?? '',
+    uri: buildOtpAuthUri(entry)
+  };
+}
+
 export async function exportTotpVault(format = 'txt') {
   const { entries } = await readVaultAndKey();
   if (format === 'json') {
@@ -1055,30 +1156,22 @@ export async function exportTotpVault(format = 'txt') {
       }))
     }, null, 2);
   }
-  return entries.map(e => {
-    const label = e.account ? `${e.issuer}:${e.account}` : e.issuer;
-    const params = new URLSearchParams({
-      secret: e.secret,
-      issuer: e.issuer,
-      algorithm: e.algorithm || 'SHA1',
-      digits: String(e.digits || 6),
-      period: String(e.period || 30)
-    });
-    return `otpauth://totp/${encodeURIComponent(label)}?${params.toString()}`;
-  }).join('\n');
+  return entries.map(buildOtpAuthUri).join('\n');
 }
 
 export async function getTotpById(id, now = Date.now()) {
-  const { entries } = await readVaultAndKey();
+  const { entries, offsetSeconds } = await readVaultAndKey();
   const entry = entries.find(item => item.id === id);
   if (!entry) throw new Error('TOTP_NOT_FOUND');
-  const generated = await generateTotpCode(entry, now);
+  const effectiveNow = Number(now) + offsetSeconds * 1000;
+  const generated = await generateTotpCode(entry, effectiveNow);
   return {
     status: 'found',
     id: entry.id,
     issuer: entry.issuer,
     account: entry.account ?? '',
     domain: entry.domain ?? '',
+    timeOffsetSeconds: offsetSeconds,
     ...generated
   };
 }
@@ -1091,7 +1184,8 @@ export function describeTotpError(error) {
     TOTP_WRONG_PIN: 'Неверный PIN-код для разблокировки 2FA.',
     TOTP_NOT_FOUND: 'Запись 2FA не найдена.',
     TOTP_IMPORT_EMPTY: 'Не найдено ни одной 2FA-записи для импорта.',
-    TOTP_IMPORT_ENCRYPTED_JSON: 'Этот JSON-файл зашифрован паролем Authenticator. Экспортируйте незашифрованную копию (.txt с otpauth:// или обычный JSON) и импортируйте её.'
+    TOTP_IMPORT_ENCRYPTED_JSON: 'Этот JSON-файл зашифрован паролем Authenticator. Экспортируйте незашифрованную копию (.txt с otpauth:// или обычный JSON) и импортируйте её.',
+    CLOCK_CHECK_FAILED: 'Не удалось сверить точное время с сервером. Поправку можно ввести вручную.'
   };
   return map[error?.message] ?? 'Не удалось обработать 2FA-ключ локально.';
 }

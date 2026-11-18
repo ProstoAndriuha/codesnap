@@ -28,6 +28,10 @@ import {
   listAllTotpCodes,
   importTotpPayload,
   exportTotpVault,
+  exportTotpAccountUri,
+  getTotpClockState,
+  setTotpTimeOffset,
+  measureServerClockSkew,
   refreshTotpSiteHints,
   TOTP_GRACE_SECONDS,
   awaitFreshTotpResult,
@@ -79,6 +83,7 @@ function candidatePayload(candidate, sessionId, inline = false) {
     kind: candidate.kind ?? (candidate.code && candidate.link ? 'both' : candidate.link ? 'link' : 'code'),
     code: candidate.code ?? null,
     link: candidate.link ?? null,
+    withdrawalInfo: candidate.withdrawalInfo ?? null,
     timestamp: candidate.timestamp,
     lifetimeSeconds: candidate.lifetimeSeconds,
     from: candidate.from,
@@ -254,10 +259,11 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
       return {
         status: 'ambiguous',
         message: 'Several recent matches found. Choose the email you requested.',
-        candidates: ranked.candidates.map(({ kind, code, link, timestamp, accountEmail, accountProvider, from, subject, lifetimeSeconds, requiresReview }, index) => ({
+        candidates: ranked.candidates.map(({ kind, code, link, withdrawalInfo, timestamp, accountEmail, accountProvider, from, subject, lifetimeSeconds, requiresReview }, index) => ({
           kind,
           code,
           link,
+          withdrawalInfo: withdrawalInfo ?? null,
           timestamp,
           accountEmail,
           accountProvider,
@@ -642,7 +648,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           };
           const siteMatch = payload.origin ? await getTotpCandidatesForSite(payload.origin, mergedCtx) : { status: 'none', candidates: [] };
           const phishingAlert = payload.origin ? await getOriginPhishingAlert(payload.origin) : { suspicious: false };
-          return { status: 'ok', ...vaultStatus, siteMatch, phishingAlert };
+          const clockState = await getTotpClockState();
+          return { status: 'ok', ...vaultStatus, siteMatch, phishingAlert, clockState };
         }
         if (command === 'list_all') {
           await ensureTotpHintsFresh();
@@ -653,12 +660,16 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           };
           const list = await listAllTotpCodes(payload.origin || '', mergedCtx);
           const phishingAlert = payload.origin ? await getOriginPhishingAlert(payload.origin) : { suspicious: false };
-          return { ...list, status: 'ok', vaultLocked: list.status === 'locked', phishingAlert };
+          const clockState = await getTotpClockState();
+          return { ...list, status: 'ok', vaultLocked: list.status === 'locked', phishingAlert, clockState };
         }
         if (command === 'add') return { status: 'ok', ...await addTotpAccount(payload.input, payload.meta ?? {}) };
         if (command === 'update') return await updateTotpAccount(payload.id, payload.patch ?? {});
         if (command === 'import') return await importTotpPayload(payload.text, payload.meta ?? {});
         if (command === 'export') return { status: 'ok', data: await exportTotpVault(payload.format || 'txt') };
+        if (command === 'export_uri') return { status: 'ok', ...await exportTotpAccountUri(payload.id) };
+        if (command === 'set_time_offset') return { status: 'ok', clockState: await setTotpTimeOffset(payload.offsetSeconds) };
+        if (command === 'check_clock_skew') return { status: 'ok', ...await measureServerClockSkew({ autoApply: Boolean(payload.autoApply) }) };
         if (command === 'add_entries') {
           const list = Array.isArray(payload.entries) ? payload.entries : [];
           if (!list.length) return { status: 'error', message: 'Не найдено ни одной 2FA-записи.' };
@@ -814,6 +825,19 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     }
     if (request.type === 'INSERT_DUAL_POPUP' && !sender.tab) {
       return insertDual(request);
+    }
+    if (request.type === 'SPLIT_PASTE_POPUP' && !sender.tab) {
+      if (!Number.isInteger(request.tabId) || !request.origin?.startsWith('https://')) {
+        return { status: 'error', message: 'Open an HTTPS website first.' };
+      }
+      const phishingAlert = await getOriginPhishingAlert(request.origin);
+      if (phishingAlert.suspicious) return phishingBlockedPayload(phishingAlert);
+      const res = await chrome.tabs.sendMessage(
+        request.tabId,
+        { type: 'INSERT_SPLIT_CODE', code: request.code, origin: request.origin },
+        { frameId: 0 }
+      ).catch(() => null);
+      return res ?? { status: 'error', message: 'Подходящие ячейки для вставки не найдены.' };
     }
     if (request.type === 'TRIGGER_QUICK_FILL' && !sender.tab) {
       const targetTab = request.tab ?? (Number.isInteger(request.tabId) ? await chrome.tabs.get(request.tabId).catch(() => null) : null);
