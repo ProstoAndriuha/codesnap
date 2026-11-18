@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-firefox/
 __pycache__/
 *.pyc
 *.dpapi

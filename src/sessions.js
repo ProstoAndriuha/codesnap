@@ -9,6 +9,7 @@ export class SessionStore {
   }
   get(tabId) { return this.#items.get(tabId); }
   set(tabId, item) { this.#items.set(tabId, item); }
+  entries() { return [...this.#items.entries()]; }
   delete(tabId) { this.#items.delete(tabId); }
   deleteTab(tabId) {
     for (const key of this.#items.keys()) if (String(key).startsWith(`${tabId}:`)) this.#items.delete(key);

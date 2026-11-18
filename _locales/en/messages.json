@@ -1,12 +1,12 @@
 {
   "appName": {
-    "message": "CodeSnap – Gmail & Email Verification Codes"
+    "message": "CodeSnap – Email Codes & Activation Links"
   },
   "appDescription": {
-    "message": "Find Gmail and Yandex email codes and fill OTP fields with one click. Optional Cloud IMAP without installing programs."
+    "message": "Find verification codes and activation links across Gmail, Yandex, Outlook, Yahoo, Mail.ru and more — 100% locally in your browser."
   },
   "tagline": {
-    "message": "Your email codes, exactly where you need them."
+    "message": "Your email codes & activation links, 100% locally."
   },
   "currentWebsite": {
     "message": "CURRENT WEBSITE"
@@ -35,6 +35,9 @@
   "badgeReady": {
     "message": "Email code ready"
   },
+  "badgeLinkReady": {
+    "message": "Activation link"
+  },
   "badgeFound": {
     "message": "Code field found"
   },
@@ -44,23 +47,41 @@
   "desc2fa": {
     "message": "This field needs a code from an authenticator app."
   },
+  "desc2faRecovery": {
+    "message": "This field needs a backup or recovery code."
+  },
+  "desc2faHardware": {
+    "message": "This field needs a hardware key or passkey."
+  },
   "descSms": {
     "message": "This field needs a text-message code."
   },
   "descEmail": {
     "message": "A matching email code can appear beside the field."
   },
+  "descLinkPrompt": {
+    "message": "Confirmation link page detected. Looking for the link in your mail…"
+  },
   "descUnknown": {
-    "message": "Check the requested code source before using Gmail."
+    "message": "Check the requested code source before using your mail."
   },
   "descManual": {
-    "message": "No code field yet. You can still search Gmail."
+    "message": "No code field yet. You can still search your mail for codes or activation links."
   },
   "tapToInsert": {
     "message": "Tap to insert ↗"
   },
   "tapToCopy": {
     "message": "Tap to copy ↗"
+  },
+  "tapToOpenLink": {
+    "message": "Open confirmation link ↗"
+  },
+  "copyLink": {
+    "message": "Copy link"
+  },
+  "linkOpened": {
+    "message": "Confirmation link opened in a new tab."
   },
   "codeInserted": {
     "message": "Code inserted. Finish on the website."
@@ -74,6 +95,9 @@
   "chooseAccount": {
     "message": "Choose mail account"
   },
+  "mailProviderLabel": {
+    "message": "Mail service"
+  },
   "allAccounts": {
     "message": "All connected accounts"
   },
@@ -84,10 +108,10 @@
     "message": "Remove selected"
   },
   "connectPrompt": {
-    "message": "Connect a mail account to find your codes."
+    "message": "Connect Gmail or open any webmail tab to find codes & links."
   },
-  "privacyDisclaimer": {
-    "message": "Gmail connects directly to Google. Optional CodeSnap Cloud processes recent IMAP mail and stores credentials encrypted on our server. No sending or deleting emails."
+  "directMailPrivacy": {
+    "message": "100% local in your browser. No CodeSnap servers, no Python helpers, no sending or deleting emails."
   },
   "privacyLink": {
     "message": "Privacy"
@@ -105,22 +129,22 @@
     "message": "✓ Multiple mail accounts"
   },
   "proFeatBeside": {
-    "message": "✓ Codes beside fields"
+    "message": "✓ Codes & links beside fields"
   },
   "proFeatSpeed": {
     "message": "✓ Faster active search"
   },
   "proFeatMatch": {
-    "message": "✓ Advanced matching"
+    "message": "✓ Smart site matching"
   },
   "proFeatAdFree": {
-    "message": "✓ Ad-free at launch"
+    "message": "✓ 100% local & ad-free"
   },
   "proNote": {
-    "message": "Pro features are unlocked in this test build. Payments are not available yet."
+    "message": "All features run locally in your browser without external CodeSnap servers."
   },
   "footerTrust": {
-    "message": "CodeSnap never submits the website form for you."
+    "message": "CodeSnap never submits forms or opens links automatically."
   },
   "inlineChoose": {
     "message": "Choose the email you requested"
@@ -134,8 +158,14 @@
   "inlineFill": {
     "message": "Fill"
   },
+  "inlineOpenLink": {
+    "message": "Open link"
+  },
+  "inlineOpenShort": {
+    "message": "Link"
+  },
   "detailedPopupDescription": {
-    "message": "Show code, sender, account and time beside the field."
+    "message": "Show code, link, sender, account and time beside the field."
   },
   "inlineChooseShort": {
     "message": "Choose"
@@ -153,42 +183,75 @@
     "message": "Could not insert"
   },
   "inlineReview": {
-    "message": "Check sender and subject before inserting"
+    "message": "Check sender and subject before continuing"
   },
   "inlineLatest": {
     "message": "LATEST"
   },
-  "mailCloudTitle": {
-    "message": "Mail through CodeSnap Cloud"
+  "localWebmailTitle": {
+    "message": "Local webmail tabs"
   },
-  "mailCloudDescription": {
-    "message": "Yandex, Mail.ru, Yahoo and IMAP without installing programs. Gmail connects directly."
+  "localWebmailDescription": {
+    "message": "Read recent codes and activation links locally from open Yandex, Outlook, Yahoo, Mail.ru, Proton, iCloud, Zoho, Rambler, Fastmail, AOL and GMX tabs without passwords."
   },
-  "mailCloudStorage": {
-    "message": "App passwords and OAuth tokens are encrypted on the CodeSnap server. Mail is processed in memory, not saved to disk. Turning Cloud off pauses access; remove each account first to delete its stored credentials."
+  "localApiOptional": {
+    "message": "Direct local API (no open tab required, optional)"
   },
-  "mailCloudConsent": {
-    "message": "Allow the CodeSnap server to store connection credentials encrypted and read recent emails to find codes. Removing the account deletes its connection credentials from the server."
+  "fastmailTokenLabel": {
+    "message": "Fastmail API token (JMAP, read-only)"
   },
-  "mailCloudConnect": {
-    "message": "Connect mail"
+  "outlookClientIdLabel": {
+    "message": "Microsoft App Client ID (OAuth PKCE)"
   },
-  "mailCloudEnableFirst": {
-    "message": "Enable Mail through CodeSnap Cloud in Settings below, then confirm the connection in the form."
+  "connectLocalApi": {
+    "message": "Connect local API"
   },
-  "mailCloudConsentRequired": {
-    "message": "Check the consent box to allow the CodeSnap server to read recent emails."
+  "cmdFillCode": {
+    "message": "Find and insert verification code"
   },
-  "connectYandexOAuth": {
-    "message": "Sign in with Yandex"
+  "contextMenuFill": {
+    "message": "CodeSnap: Find & insert verification code"
   },
-  "yandexOAuthHint": {
-    "message": "Sign in on the official Yandex website. Our server reads mail through IMAP because Chrome cannot connect to IMAP directly. No software installation is needed."
+  "totpTitle": {
+    "message": "2FA Authenticator"
   },
-  "mailPasswordAlternative": {
-    "message": "Alternative: app password"
+  "totpAddToggle": {
+    "message": "+ Add 2FA key"
   },
-  "directMailPrivacy": {
-    "message": "Gmail connects directly to Google. CodeSnap never sends or deletes emails."
+  "totpScanPage": {
+    "message": "Scan QR / key on page"
+  },
+  "totpInputLabel": {
+    "message": "Base32 secret or otpauth:// URI"
+  },
+  "totpIssuerLabel": {
+    "message": "Service / website name"
+  },
+  "totpSave": {
+    "message": "Save 2FA locally"
+  },
+  "dualFillAction": {
+    "message": "⚡ Insert both codes (Email + 2FA)"
+  },
+  "dualInserted": {
+    "message": "Both Email and 2FA codes inserted."
+  },
+  "autoClearTitle": {
+    "message": "Auto-clear clipboard"
+  },
+  "autoClearDescription": {
+    "message": "Clear copied verification codes from clipboard after 45 seconds."
+  },
+  "muteThisSite": {
+    "message": "Hide chip on this site"
+  },
+  "unmuteThisSite": {
+    "message": "Enable chip on this site"
+  },
+  "muteSiteInline": {
+    "message": "Hide on this site"
+  },
+  "inlineExpiredShort": {
+    "message": "Expired"
   }
 }

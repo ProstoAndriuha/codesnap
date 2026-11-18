@@ -1,0 +1,610 @@
+import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity } from './core.js';
+
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const PBKDF2_ITERATIONS = 150_000;
+
+function toBase64(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let bin = '';
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  return btoa(bin);
+}
+
+function fromBase64(str) {
+  const bin = atob(String(str ?? ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+export function normalizeBase32(raw) {
+  const clean = String(raw ?? '')
+    .toUpperCase()
+    .replace(/[\s\-=]+/g, '');
+  if (!/^[A-Z2-7]{8,128}$/.test(clean)) {
+    throw new Error('TOTP_INVALID_SECRET');
+  }
+  return clean;
+}
+
+export function decodeBase32(raw) {
+  const clean = normalizeBase32(raw);
+  const bytes = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const ch of clean) {
+    const val = BASE32_ALPHABET.indexOf(ch);
+    if (val < 0) throw new Error('TOTP_INVALID_SECRET');
+    buffer = (buffer << 5) | val;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >>> bits) & 0xff);
+    }
+  }
+  if (!bytes.length) throw new Error('TOTP_INVALID_SECRET');
+  return new Uint8Array(bytes);
+}
+
+export function encodeBase32(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (let i = 0; i < arr.length; i++) {
+    value = (value << 8) | arr[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += BASE32_ALPHABET[(value >>> bits) & 31];
+    }
+  }
+  if (bits > 0) out += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+
+function readProtobufFields(bytes) {
+  let pos = 0;
+  const readVarint = () => {
+    let res = 0;
+    let factor = 1;
+    while (pos < bytes.length) {
+      const b = bytes[pos++];
+      res += (b & 0x7f) * factor;
+      if ((b & 0x80) === 0) return res;
+      factor *= 128;
+    }
+    throw new Error('TOTP_INVALID_SECRET');
+  };
+  const fields = [];
+  while (pos < bytes.length) {
+    const tag = readVarint();
+    const fieldNum = tag >>> 3;
+    const wireType = tag & 7;
+    if (wireType === 0) {
+      fields.push({ fieldNum, wireType, value: readVarint() });
+    } else if (wireType === 2) {
+      const len = readVarint();
+      if (pos + len > bytes.length) throw new Error('TOTP_INVALID_SECRET');
+      fields.push({ fieldNum, wireType, value: bytes.subarray(pos, pos + len) });
+      pos += len;
+    } else if (wireType === 1) {
+      pos += 8;
+    } else if (wireType === 5) {
+      pos += 4;
+    } else {
+      throw new Error('TOTP_INVALID_SECRET');
+    }
+  }
+  return fields;
+}
+
+export function parseOtpAuthMigrationUri(rawUri, fallback = {}) {
+  let parsed;
+  try { parsed = new URL(String(rawUri ?? '').trim()); } catch { throw new Error('TOTP_INVALID_SECRET'); }
+  if (parsed.protocol.toLowerCase() !== 'otpauth-migration:') throw new Error('TOTP_UNSUPPORTED_URI');
+  const dataParam = parsed.searchParams.get('data');
+  if (!dataParam) throw new Error('TOTP_INVALID_SECRET');
+  const b64 = dataParam.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+  const payloadBytes = fromBase64(padded);
+  const entries = [];
+  const decoder = new TextDecoder();
+
+  for (const field of readProtobufFields(payloadBytes)) {
+    if (field.fieldNum !== 1 || field.wireType !== 2) continue;
+    let secretBytes = null;
+    let name = '';
+    let issuer = '';
+    let algorithm = 'SHA1';
+    let digits = 6;
+    let otpType = 2;
+
+    for (const sub of readProtobufFields(field.value)) {
+      if (sub.fieldNum === 1 && sub.wireType === 2) secretBytes = sub.value;
+      else if (sub.fieldNum === 2 && sub.wireType === 2) name = decoder.decode(sub.value).trim();
+      else if (sub.fieldNum === 3 && sub.wireType === 2) issuer = decoder.decode(sub.value).trim();
+      else if (sub.fieldNum === 4 && sub.wireType === 0) {
+        algorithm = sub.value === 2 ? 'SHA256' : sub.value === 3 ? 'SHA512' : 'SHA1';
+      } else if (sub.fieldNum === 5 && sub.wireType === 0) {
+        digits = (sub.value === 2 || sub.value === 8) ? 8 : 6;
+      } else if (sub.fieldNum === 6 && sub.wireType === 0) {
+        otpType = sub.value;
+      }
+    }
+
+    if (otpType === 1 || !secretBytes?.length) continue;
+    const secret = normalizeBase32(encodeBase32(secretBytes));
+    let labelIssuer = '';
+    let account = name;
+    if (name.includes(':')) {
+      const idx = name.indexOf(':');
+      labelIssuer = name.slice(0, idx).trim();
+      account = name.slice(idx + 1).trim();
+    }
+    const finalIssuer = (issuer || labelIssuer || fallback.issuer || fallback.domain || 'Account').slice(0, 60);
+    const domain = fallback.explicitDomain
+      ? rootDomainOf(fallback.explicitDomain)
+      : inferDomainFromIssuer(finalIssuer, fallback.domain || '');
+    entries.push({ secret, issuer: finalIssuer, account: account.slice(0, 80), domain, algorithm, digits, period: 30 });
+  }
+
+  if (!entries.length) throw new Error('TOTP_INVALID_SECRET');
+  return entries;
+}
+
+export function extractTotpFromScannedText(rawText, fallback = {}) {
+  const raw = String(rawText ?? '').trim();
+  if (!raw) return { kind: 'empty' };
+  if (/^otpauth:\/\/totp/i.test(raw)) {
+    return { kind: 'totp', entries: [parseTotpInput(raw, fallback)] };
+  }
+  if (/^otpauth:\/\/hotp/i.test(raw)) {
+    return { kind: 'unsupported_hotp' };
+  }
+  if (/^otpauth-migration:\/\//i.test(raw)) {
+    return { kind: 'totp', entries: parseOtpAuthMigrationUri(raw, fallback) };
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    let url;
+    try { url = new URL(raw); } catch { return { kind: 'non_totp_qr', preview: raw.slice(0, 40) }; }
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+    const secretParam = url.searchParams.get('secret') || hashParams.get('secret');
+    if (secretParam && /^[A-Z2-7\s\-=]{16,64}$/i.test(secretParam)) {
+      return {
+        kind: 'totp',
+        entries: [parseTotpInput(secretParam, {
+          ...fallback,
+          issuer: url.searchParams.get('issuer') || fallback.issuer || url.hostname,
+          domain: fallback.domain || url.hostname
+        })]
+      };
+    }
+    return { kind: 'non_totp_qr', preview: url.hostname };
+  }
+  if (/^[A-Z2-7\s\-=]{16,64}$/i.test(raw)) {
+    return { kind: 'totp', entries: [parseTotpInput(raw, fallback)] };
+  }
+  return { kind: 'non_totp_qr', preview: raw.slice(0, 40) };
+}
+
+function inferDomainFromIssuer(issuer, fallbackDomain = '') {
+  const norm = String(issuer ?? '').trim().toLowerCase();
+  if (!norm || norm === 'account' || norm === 'website') {
+    return fallbackDomain ? rootDomainOf(fallbackDomain) : '';
+  }
+  for (const [, site] of Object.entries(SITES)) {
+    if (norm === site.name.toLowerCase() || norm.includes(site.name.toLowerCase())) {
+      try { return rootDomainOf(new URL(site.origins[0]).hostname); } catch { /* ignore */ }
+    }
+  }
+  if (/\bgoogle\b/i.test(norm)) return 'google.com';
+  for (const eco of ECOSYSTEMS) {
+    const ecoHit =
+      eco.siteDomains.some(d => norm === d || norm === d.split('.')[0]) ||
+      eco.aliases.some(a => norm === a || (a.length >= 4 && norm.includes(a)));
+    if (ecoHit) return eco.siteDomains[0];
+  }
+  const domainMatch = /\b([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/i.exec(norm);
+  if (domainMatch) return rootDomainOf(domainMatch[1]);
+  return fallbackDomain ? rootDomainOf(fallbackDomain) : '';
+}
+
+export function parseTotpInput(rawInput, fallback = {}) {
+  const raw = String(rawInput ?? '').trim();
+  if (!raw) throw new Error('TOTP_INVALID_SECRET');
+
+  if (/^otpauth:\/\//i.test(raw)) {
+    let parsed;
+    try { parsed = new URL(raw); } catch { throw new Error('TOTP_INVALID_SECRET'); }
+    if (parsed.protocol.toLowerCase() !== 'otpauth:') throw new Error('TOTP_UNSUPPORTED_URI');
+    const hostType = parsed.hostname.toLowerCase();
+    const pathClean = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    let mode = hostType;
+    let label = pathClean;
+    if (!mode) {
+      const firstSlash = pathClean.indexOf('/');
+      mode = (firstSlash >= 0 ? pathClean.slice(0, firstSlash) : pathClean).toLowerCase();
+      label = firstSlash >= 0 ? pathClean.slice(firstSlash + 1) : '';
+    }
+    if (mode !== 'totp') throw new Error('TOTP_UNSUPPORTED_URI');
+
+    let issuerFromLabel = '';
+    let accountFromLabel = '';
+    if (label.includes(':')) {
+      const idx = label.indexOf(':');
+      issuerFromLabel = label.slice(0, idx).trim();
+      accountFromLabel = label.slice(idx + 1).trim();
+    } else if (label.includes('@')) {
+      accountFromLabel = label.trim();
+    } else {
+      issuerFromLabel = label.trim();
+    }
+
+    const secret = normalizeBase32(parsed.searchParams.get('secret') ?? '');
+    const issuer = (parsed.searchParams.get('issuer') || issuerFromLabel || fallback.issuer || fallback.domain || 'Account').trim().slice(0, 60);
+    const account = (accountFromLabel || fallback.account || '').trim().slice(0, 80);
+
+    const rawAlgo = String(parsed.searchParams.get('algorithm') || fallback.algorithm || 'SHA1').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const algorithm = rawAlgo === 'SHA256' || rawAlgo === 'SHA512' ? rawAlgo : 'SHA1';
+
+    const rawDigits = Number(parsed.searchParams.get('digits') ?? fallback.digits ?? 6);
+    const digits = Number.isInteger(rawDigits) && rawDigits >= 6 && rawDigits <= 8 ? rawDigits : 6;
+
+    const rawPeriod = Number(parsed.searchParams.get('period') ?? fallback.period ?? 30);
+    const period = Number.isFinite(rawPeriod) && rawPeriod >= 15 && rawPeriod <= 120 ? Math.round(rawPeriod) : 30;
+
+    const domain = fallback.explicitDomain ? rootDomainOf(fallback.explicitDomain) : inferDomainFromIssuer(issuer, fallback.domain || '');
+    return { secret, issuer, account, domain, algorithm, digits, period };
+  }
+
+  const secret = normalizeBase32(raw);
+  const issuer = String(fallback.issuer || fallback.domain || 'Website').trim().slice(0, 60);
+  const account = String(fallback.account || '').trim().slice(0, 80);
+  const rawAlgo = String(fallback.algorithm || 'SHA1').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const algorithm = rawAlgo === 'SHA256' || rawAlgo === 'SHA512' ? rawAlgo : 'SHA1';
+  const rawDigits = Number(fallback.digits ?? 6);
+  const digits = Number.isInteger(rawDigits) && rawDigits >= 6 && rawDigits <= 8 ? rawDigits : 6;
+  const rawPeriod = Number(fallback.period ?? 30);
+  const period = Number.isFinite(rawPeriod) && rawPeriod >= 15 && rawPeriod <= 120 ? Math.round(rawPeriod) : 30;
+  const domain = fallback.explicitDomain ? rootDomainOf(fallback.explicitDomain) : inferDomainFromIssuer(issuer, fallback.domain || '');
+  return { secret, issuer, account, domain, algorithm, digits, period };
+}
+
+export async function generateTotpCode(entryOrSecret, now = Date.now()) {
+  const entry = typeof entryOrSecret === 'string'
+    ? { secret: entryOrSecret, algorithm: 'SHA1', digits: 6, period: 30 }
+    : entryOrSecret;
+  const algorithm = entry?.algorithm === 'SHA256' || entry?.algorithm === 'SHA512' ? entry.algorithm : 'SHA1';
+  const digits = Number.isInteger(entry?.digits) && entry.digits >= 6 && entry.digits <= 8 ? entry.digits : 6;
+  const period = Number.isFinite(entry?.period) && entry.period >= 15 && entry.period <= 120 ? Math.round(entry.period) : 30;
+
+  const keyBytes = decodeBase32(entry?.secret ?? '');
+  const hashName = algorithm === 'SHA256' ? 'SHA-256' : algorithm === 'SHA512' ? 'SHA-512' : 'SHA-1';
+
+  const epochSec = Math.floor(Number(now) / 1000);
+  const counter = Math.floor(epochSec / period);
+  const counterBytes = new Uint8Array(8);
+  const view = new DataView(counterBytes.buffer);
+  view.setUint32(0, Math.floor(counter / 0x100000000), false);
+  view.setUint32(4, counter >>> 0, false);
+
+  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: hashName }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, counterBytes));
+  const offset = sig[sig.length - 1] & 0x0f;
+  const binary =
+    ((sig[offset] & 0x7f) << 24) |
+    ((sig[offset + 1] & 0xff) << 16) |
+    ((sig[offset + 2] & 0xff) << 8) |
+    (sig[offset + 3] & 0xff);
+  const code = String(binary % (10 ** digits)).padStart(digits, '0');
+  const remainingSeconds = period - (((epochSec % period) + period) % period);
+
+  return { code, remainingSeconds, period, digits, counter };
+}
+
+async function importRawAesKey(rawBytes) {
+  return crypto.subtle.importKey('raw', rawBytes, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+}
+
+async function derivePinAesKey(passphrase, saltBytes) {
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(String(passphrase ?? '')),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptEntries(entries, aesKey) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(JSON.stringify(entries));
+  const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, plain);
+  return { iv: toBase64(iv), ciphertext: toBase64(cipherBuf) };
+}
+
+async function decryptEntries(vault, aesKey) {
+  const plainBuf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromBase64(vault.iv) },
+    aesKey,
+    fromBase64(vault.ciphertext)
+  );
+  const parsed = JSON.parse(new TextDecoder().decode(plainBuf));
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function buildHint(entry) {
+  const normIssuer = String(entry.issuer ?? '').toLowerCase();
+  const normDomain = String(entry.domain ?? '').toLowerCase();
+  const matchingEcos = ECOSYSTEMS.filter(eco =>
+    eco.siteDomains.some(d => normDomain === d || normDomain.endsWith(`.${d}`) || (d.split('.')[0].length >= 4 && normIssuer.includes(d.split('.')[0]))) ||
+    eco.aliases.some(a => normIssuer === a || (a.length >= 3 && normIssuer.includes(a)))
+  );
+  const matchDomains = [...new Set([normDomain, ...matchingEcos.flatMap(e => e.siteDomains)].filter(Boolean))];
+  if (normIssuer.includes('google') && !matchDomains.includes('google.com')) matchDomains.push('google.com');
+  const issuerWords = normIssuer.split(/[^a-z0-9а-яё]+/i).filter(w => w.length >= 3 && !/^(?:app|auth|account|totp|2fa|website|com|org|net)$/.test(w));
+  const matchNames = [...new Set([
+    normIssuer,
+    ...issuerWords,
+    ...matchingEcos.flatMap(e => e.aliases),
+    ...(normDomain ? [rootDomainOf(normDomain).split('.')[0]] : [])
+  ].filter(w => w.length >= 3 && w.length <= 40))];
+  return {
+    id: entry.id,
+    issuer: entry.issuer,
+    account: entry.account ?? '',
+    domain: entry.domain ?? '',
+    digits: entry.digits ?? 6,
+    period: entry.period ?? 30,
+    matchDomains,
+    matchNames
+  };
+}
+
+async function readVaultAndKey() {
+  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  if (!totpVault) return { vault: null, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key: null, entries: [] };
+  if (totpVault.mode === 'pin') {
+    const session = (await chrome.storage.session?.get?.('totpSessionKey')) ?? {};
+    if (!session.totpSessionKey) {
+      throw new Error('TOTP_LOCKED');
+    }
+    const key = await importRawAesKey(fromBase64(session.totpSessionKey));
+    const entries = await decryptEntries(totpVault, key);
+    return { vault: totpVault, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key, entries };
+  }
+  const key = await importRawAesKey(fromBase64(totpVault.localKey));
+  const entries = await decryptEntries(totpVault, key);
+  return { vault: totpVault, hints: Array.isArray(totpSiteHints) ? totpSiteHints : [], key, entries };
+}
+
+async function saveVaultEntries(entries, existingVault) {
+  let nextVault;
+  if (existingVault?.mode === 'pin') {
+    const session = (await chrome.storage.session?.get?.('totpSessionKey')) ?? {};
+    if (!session.totpSessionKey) throw new Error('TOTP_LOCKED');
+    const key = await importRawAesKey(fromBase64(session.totpSessionKey));
+    const encrypted = await encryptEntries(entries, key);
+    nextVault = { v: 1, mode: 'pin', salt: existingVault.salt, ...encrypted };
+  } else {
+    const rawKey = existingVault?.localKey ? fromBase64(existingVault.localKey) : crypto.getRandomValues(new Uint8Array(32));
+    const key = await importRawAesKey(rawKey);
+    const encrypted = await encryptEntries(entries, key);
+    nextVault = { v: 1, mode: 'local', localKey: toBase64(rawKey), ...encrypted };
+  }
+  const hints = entries.map(buildHint);
+  await chrome.storage.local.set({
+    totpVault: nextVault,
+    totpSiteHints: hints,
+    totpEnabled: hints.length > 0
+  });
+  return hints;
+}
+
+export async function getTotpVaultStatus() {
+  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
+  const pinProtected = totpVault?.mode === 'pin';
+  let unlocked = !pinProtected;
+  if (pinProtected) {
+    const session = (await chrome.storage.session?.get?.('totpSessionKey')) ?? {};
+    unlocked = Boolean(session.totpSessionKey);
+  }
+  return {
+    hasAccounts: hints.length > 0,
+    count: hints.length,
+    pinProtected,
+    unlocked,
+    accounts: hints
+  };
+}
+
+export async function unlockTotpVault(passphrase) {
+  const { totpVault = null } = await chrome.storage.local.get('totpVault');
+  if (!totpVault || totpVault.mode !== 'pin') return { ok: true };
+  let key;
+  try {
+    key = await derivePinAesKey(passphrase, fromBase64(totpVault.salt));
+    await decryptEntries(totpVault, key);
+  } catch {
+    throw new Error('TOTP_WRONG_PIN');
+  }
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+  await chrome.storage.session?.set?.({ totpSessionKey: toBase64(raw) });
+  return { ok: true };
+}
+
+export async function lockTotpVault() {
+  await chrome.storage.session?.set?.({ totpSessionKey: null });
+  return { ok: true };
+}
+
+export async function setTotpPassphrase(newPassphrase, currentPassphrase = '') {
+  const { totpVault = null } = await chrome.storage.local.get('totpVault');
+  let entries = [];
+  if (totpVault) {
+    if (totpVault.mode === 'pin') {
+      const session = (await chrome.storage.session?.get?.('totpSessionKey')) ?? {};
+      let key;
+      if (session.totpSessionKey) {
+        key = await importRawAesKey(fromBase64(session.totpSessionKey));
+      } else if (currentPassphrase) {
+        key = await derivePinAesKey(currentPassphrase, fromBase64(totpVault.salt));
+      } else {
+        throw new Error('TOTP_LOCKED');
+      }
+      try {
+        entries = await decryptEntries(totpVault, key);
+      } catch {
+        throw new Error('TOTP_WRONG_PIN');
+      }
+    } else {
+      const key = await importRawAesKey(fromBase64(totpVault.localKey));
+      entries = await decryptEntries(totpVault, key);
+    }
+  }
+
+  const nextPin = String(newPassphrase ?? '');
+  const hints = entries.map(buildHint);
+  if (nextPin) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const pinKey = await derivePinAesKey(nextPin, salt);
+    const encrypted = await encryptEntries(entries, pinKey);
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pinKey));
+    await chrome.storage.session?.set?.({ totpSessionKey: toBase64(raw) });
+    await chrome.storage.local.set({
+      totpVault: { v: 1, mode: 'pin', salt: toBase64(salt), ...encrypted },
+      totpSiteHints: hints,
+      totpEnabled: hints.length > 0
+    });
+  } else {
+    const rawKey = crypto.getRandomValues(new Uint8Array(32));
+    const localKey = await importRawAesKey(rawKey);
+    const encrypted = await encryptEntries(entries, localKey);
+    await chrome.storage.session?.set?.({ totpSessionKey: null });
+    await chrome.storage.local.set({
+      totpVault: { v: 1, mode: 'local', localKey: toBase64(rawKey), ...encrypted },
+      totpSiteHints: hints,
+      totpEnabled: hints.length > 0
+    });
+  }
+  return { ok: true, pinProtected: Boolean(nextPin) };
+}
+
+export async function addTotpAccount(rawInput, fallback = {}, now = Date.now()) {
+  const parsed = parseTotpInput(rawInput, fallback);
+  const { vault, entries } = await readVaultAndKey();
+  const existingIdx = entries.findIndex(item => item.secret === parsed.secret);
+  const id = existingIdx >= 0 ? entries[existingIdx].id : crypto.randomUUID();
+  const nextEntry = { id, ...parsed, createdAt: now };
+  const nextEntries = existingIdx >= 0
+    ? entries.map((item, idx) => idx === existingIdx ? nextEntry : item)
+    : [...entries, nextEntry];
+
+  const hints = await saveVaultEntries(nextEntries, vault);
+  const hint = hints.find(item => item.id === id);
+  const generated = await generateTotpCode(nextEntry, now);
+  return { account: hint, ...generated };
+}
+
+export async function removeTotpAccount(id) {
+  const { vault, entries } = await readVaultAndKey();
+  const nextEntries = entries.filter(item => item.id !== id);
+  await saveVaultEntries(nextEntries, vault);
+  return { ok: true, count: nextEntries.length };
+}
+
+export function matchTotpHintForSite(hints, origin, siteContext = {}) {
+  if (!Array.isArray(hints) || !hints.length || !origin?.startsWith('https://')) return null;
+  const identity = siteIdentity(origin, siteContext);
+  if (!identity.hostname) return null;
+
+  let best = null;
+  let bestScore = 0;
+  for (const hint of hints) {
+    let score = 0;
+    const hintDom = String(hint.domain ?? '').toLowerCase();
+    if (hintDom && (identity.hostname === hintDom || identity.hostname.endsWith(`.${hintDom}`) || (identity.siteDomain && identity.siteDomain === rootDomainOf(hintDom)))) {
+      score += 10;
+    }
+    if (Array.isArray(hint.matchDomains) && hint.matchDomains.some(d => identity.hostname === d || identity.hostname.endsWith(`.${d}`) || (identity.siteDomain && identity.siteDomain === d))) {
+      score += 8;
+    }
+    const hintIssuer = String(hint.issuer ?? '').toLowerCase();
+    const names = Array.isArray(hint.matchNames) ? hint.matchNames : [];
+    if ((hintIssuer && (hintIssuer === identity.hostName || identity.names.includes(hintIssuer))) ||
+        names.some(n => n.length >= 3 && (n === identity.hostName || identity.names.includes(n)))) {
+      score += 6;
+    }
+    if (score >= 6 && score > bestScore) {
+      bestScore = score;
+      best = hint;
+    }
+  }
+  return best;
+}
+
+export async function getTotpForSite(origin, siteContext = {}, now = Date.now()) {
+  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  const hints = Array.isArray(totpSiteHints) ? totpSiteHints : [];
+  const matched = matchTotpHintForSite(hints, origin, siteContext);
+  if (!matched) return { status: 'none' };
+  if (!totpVault) return { status: 'none' };
+
+  let entries;
+  try {
+    const state = await readVaultAndKey();
+    entries = state.entries;
+  } catch (error) {
+    if (error.message === 'TOTP_LOCKED') {
+      return { status: 'locked', account: matched };
+    }
+    return { status: 'none' };
+  }
+
+  const entry = entries.find(item => item.id === matched.id);
+  if (!entry) return { status: 'none' };
+  const generated = await generateTotpCode(entry, now);
+  return {
+    status: 'found',
+    id: entry.id,
+    issuer: entry.issuer,
+    account: entry.account ?? '',
+    domain: entry.domain ?? '',
+    ...generated
+  };
+}
+
+export async function getTotpById(id, now = Date.now()) {
+  const { entries } = await readVaultAndKey();
+  const entry = entries.find(item => item.id === id);
+  if (!entry) throw new Error('TOTP_NOT_FOUND');
+  const generated = await generateTotpCode(entry, now);
+  return {
+    status: 'found',
+    id: entry.id,
+    issuer: entry.issuer,
+    account: entry.account ?? '',
+    domain: entry.domain ?? '',
+    ...generated
+  };
+}
+
+export function describeTotpError(error) {
+  const map = {
+    TOTP_INVALID_SECRET: 'Неверный секретный ключ Base32 или ссылка otpauth://.',
+    TOTP_UNSUPPORTED_URI: 'Поддерживаются только TOTP-ключи (otpauth://totp/...).',
+    TOTP_LOCKED: 'Хранилище 2FA заблокировано PIN-кодом.',
+    TOTP_WRONG_PIN: 'Неверный PIN-код для разблокировки 2FA.',
+    TOTP_NOT_FOUND: 'Запись 2FA не найдена.'
+  };
+  return map[error?.message] ?? 'Не удалось обработать 2FA-ключ локально.';
+}

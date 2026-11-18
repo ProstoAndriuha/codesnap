@@ -1,126 +1,140 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
-test('cloud mail account search uses the same origin-bound insertion and preserves provider', async () => {
-  const prior = { chrome: globalThis.chrome, fetch: globalThis.fetch, setInterval: globalThis.setInterval };
+test('local multi-mail search scans open webmail tabs without servers and respects toggle', async () => {
+  const prior = { chrome: globalThis.chrome, setInterval: globalThis.setInterval };
   let listener;
-  let cloudEnabled = true;
-  const calls = [];
+  let webmailEnabled = true;
+  const scannedTabs = [];
   globalThis.setInterval = () => 1;
   globalThis.chrome = {
     runtime: { id: 'ongiekgidmkffdhgmjmlnjjgoggojoak', onMessage: { addListener(fn) { listener = fn; } } },
-    storage: { local: { get: async () => ({ accountSelections: {}, senders: {}, mailCloudEnabled: cloudEnabled, mailCloudToken: 'a'.repeat(43) }), set: async () => {} }, session: { get: async () => ({ extraAccounts: [] }) } },
+    storage: {
+      local: {
+        get: async () => ({ accountSelections: {}, senders: {}, localWebmailEnabled: webmailEnabled, enabledMailProviders: ['yandex', 'outlook'], localApiAccounts: [] }),
+        set: async () => {}
+      },
+      session: { get: async () => ({ extraAccounts: [] }) }
+    },
     identity: { getAuthToken: async () => { throw new Error('no google'); } },
-    tabs: { get: async () => ({ url: 'https://example.com/login' }), sendMessage: async (_id, request) => request.type === 'FIELD_STATUS' ? { origin: 'https://example.com', fieldId: 'field' } : { status: 'inserted' }, onRemoved: { addListener() {} }, onUpdated: { addListener() {} } }
-  };
-  globalThis.fetch = async (url, options) => {
-    assert.equal(url, 'https://codesnap.fundingbotsecret.pp.ua/api/mail');
-    assert.equal(options.headers.Authorization, 'Bearer ' + 'a'.repeat(43));
-    const request = JSON.parse(options.body); calls.push(request);
-    const result = request.command === 'list' ? { ok:true,accounts:[{id:'yahoo',email:'owner@yahoo.com',provider:'yahoo'},{id:'yandex',email:'owner@yandex.ru',provider:'yandex'}] } : request.command === 'search' ? {ok:true,messages:[{id:'1',from:'codes@example.com',subject:'Example verification code',body:'Your verification code is 483921',timestamp:Date.now()}]} : {ok:true};
-    return {ok:true,json:async()=>result};
+    tabs: {
+      query: async () => [
+        { id: 1, url: 'https://example.com/login' },
+        { id: 42, url: 'https://mail.yandex.ru/?uid=1#inbox' }
+      ],
+      get: async id => ({ id, url: id === 1 ? 'https://example.com/login' : 'https://mail.yandex.ru/' }),
+      sendMessage: async (tabId, request) => {
+        if (request.type === 'FIELD_STATUS') return { origin: 'https://example.com', fieldId: 'field' };
+        if (request.type === 'SCAN_WEBMAIL') {
+          scannedTabs.push(tabId);
+          return {
+            ok: true,
+            provider: 'yandex',
+            accountEmail: 'owner@yandex.ru',
+            messages: [{ id: 'ym-1', from: 'codes@example.com', subject: 'Example verification code', body: 'Your verification code is 483921', timestamp: Date.now() }],
+            unreadHints: []
+          };
+        }
+        return { status: 'inserted' };
+      },
+      onRemoved: { addListener() {} },
+      onUpdated: { addListener() {} }
+    }
   };
   try {
-    await import(`../src/background.js?mail=${Math.random()}`);
+    await import(`../src/background.js?localmail=${Math.random()}`);
     const send = (request, sender) => new Promise(resolve => listener(request, sender, resolve));
-    const found = await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field', channel: 'email', accountSelection: 'mail:yahoo' }, {});
+    const found = await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field', channel: 'email', accountSelection: 'local:tab:42' }, {});
     assert.equal(found.status, 'found');
-    assert.equal(found.accountEmail, 'owner@yahoo.com');
-    assert.equal(found.accountProvider, 'yahoo');
-    assert.deepEqual(calls.filter(call => call.command === 'search').map(call => call.id), ['yahoo']);
-    cloudEnabled = false;
-    assert.equal((await send({type:'INSERT_POPUP',tabId:1,origin:'https://example.com',sessionId:found.sessionId},{})).status,'expired','cached Cloud code cannot be inserted after disabling Cloud');
-    const noCloudRequests = calls.length;
-    assert.notEqual((await send({type:'SEARCH_POPUP',tabId:1,origin:'https://example.com',siteId:'generic',fieldId:'field',channel:'email',accountSelection:'mail:yahoo'},{})).status,'found');
-    assert.equal(calls.length,noCloudRequests);
-    cloudEnabled = true;
-    const renewed = await send({type:'SEARCH_POPUP',tabId:1,origin:'https://example.com',siteId:'generic',fieldId:'field',channel:'email',accountSelection:'mail:yahoo'},{});
-    assert.equal((await send({ type: 'INSERT_POPUP', tabId: 1, origin: 'https://example.com', sessionId: renewed.sessionId }, {})).status, 'inserted');
-    const before = calls.length;
-    assert.equal((await send({ type: 'MAIL_ACCOUNT', payload: { command: 'connect', password: 'must not reach helper' } }, { tab: { id: 1 }, url: 'https://example.com' })).status, 'untrusted');
-    assert.equal(calls.length, before);
-    assert.equal((await send({ type: 'MAIL_ACCOUNT', payload: { command: 'remove', id: 'yahoo' } }, { url: `chrome-extension://${globalThis.chrome.runtime.id}/src/popup.html` })).status, 'ok');
-  } finally { Object.assign(globalThis, prior); }
+    assert.equal(found.code, '483921');
+    assert.equal(found.accountEmail, 'owner@yandex.ru');
+    assert.equal(found.accountProvider, 'yandex');
+    assert.deepEqual(scannedTabs, [42]);
+
+    webmailEnabled = false;
+    assert.equal((await send({ type: 'INSERT_POPUP', tabId: 1, origin: 'https://example.com', sessionId: found.sessionId }, {})).status, 'expired');
+    const callsBefore = scannedTabs.length;
+    assert.notEqual((await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field', channel: 'email', accountSelection: 'local:tab:42' }, {})).status, 'found');
+    assert.equal(scannedTabs.length, callsBefore);
+
+    assert.equal((await send({ type: 'LOCAL_MAIL_ACTION', payload: { command: 'connect', provider: 'yandex' } }, { tab: { id: 1 }, url: 'https://example.com' })).status, 'untrusted');
+  } finally {
+    Object.assign(globalThis, prior);
+  }
 });
 
-test('Cloud is opt-in and errors do not disclose credentials', async () => {
-  const prior=globalThis.chrome;
-  globalThis.chrome={storage:{local:{get:async()=>({mailCloudEnabled:false})}}};
-  try {
-    const {mailHost,listMailAccounts,describeMailError}=await import('../src/mail-bridge.js');
-    assert.deepEqual(await listMailAccounts(),[]);
-    await assert.rejects(mailHost({command:'connect'}),/MAIL_CLOUD_DISABLED/);
-    assert.doesNotMatch(describeMailError(new Error('private server credentials')),/private server credentials/);
-  } finally {globalThis.chrome=prior;}
+test('no Cloud backend URLs or helper settings remain in extension source or manifest', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.host_permissions.some(p => p.includes('fundingbotsecret')), false);
+  for (const file of readdirSync(new URL('../src', import.meta.url)).filter(name => /\.(js|html|css)$/.test(name))) {
+    const content = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(content, /fundingbotsecret\.pp\.ua|mailCloudEnabled|MAIL_YANDEX_CONNECT/);
+  }
 });
 
-test('mail connection UI sends credentials only to extension service worker, then clears them', async () => {
+test('popup exposes 12 local mail providers and handles local connect/remove safely', async () => {
   const html = readFileSync(new URL('../src/popup.html', import.meta.url), 'utf8');
   const code = readFileSync(new URL('../src/popup.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '');
   const dom = new JSDOM(html, { url: 'https://extension-test.invalid', runScripts: 'outside-only' });
   const { window } = dom;
-  const writes = [], requests = [];
+  const requests = [];
   window.listAccounts = async () => ({ primaryEmail: null, extras: [], mailAccounts: [] });
-  window.MAIL_PROVIDERS = { yandex: {name:'Яндекс',host:'imap.yandex.ru'}, yahoo: { name: 'Yahoo', host: 'imap.mail.yahoo.com' }, imap: { name: 'IMAP', host: '' } };
+  window.LOCAL_MAIL_PROVIDERS = {
+    yandex: { name: 'Яндекс Почта' },
+    outlook: { name: 'Outlook / Hotmail' },
+    yahoo: { name: 'Yahoo Mail' },
+    mailru: { name: 'Mail.ru' },
+    proton: { name: 'Proton Mail' },
+    icloud: { name: 'iCloud Mail' },
+    zoho: { name: 'Zoho Mail' },
+    rambler: { name: 'Рамблер/почта' },
+    fastmail: { name: 'Fastmail' },
+    aol: { name: 'AOL Mail' },
+    gmx: { name: 'GMX / Mail.com' },
+    gmail: { name: 'Gmail (вкладка)' }
+  };
   window.chrome = {
-    i18n: { getMessage: () => '' }, runtime: { getManifest: () => ({ version: '0.7.0' }), sendMessage: async request => { requests.push(request); return { status: 'ok', account: { email: 'owner@yahoo.com' } }; } },
+    i18n: { getMessage: () => '' },
+    runtime: {
+      getManifest: () => ({ version: '0.9.0' }),
+      sendMessage: async request => {
+        requests.push(request);
+        return { status: 'ok', account: { id: 'pin:outlook', provider: 'outlook', email: 'Outlook / Hotmail' } };
+      }
+    },
     tabs: { query: async () => [{ id: 1, url: 'about:blank' }] },
-    storage: { local: { get: async () => ({}), set: async data => writes.push(data) } }
+    storage: { local: { get: async () => ({}), set: async () => {} } }
   };
   window.eval(code);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await new Promise(resolve => setTimeout(resolve, 25));
   const $ = id => window.document.getElementById(id);
-  assert.equal($('provider').querySelector('option[value="outlook"]'), null);
-  assert.equal($('provider').hidden,true);
-  assert.equal($('cloudMailPrivacy').hidden,true);
-  $('provider').value = 'yahoo'; $('provider').dispatchEvent(new window.Event('change'));
-  assert.equal($('mailForm').hidden,true);
-  assert.equal($('provider').value,'gmail');
-  $('mailCloudEnabled').checked=true; $('mailCloudEnabled').dispatchEvent(new window.Event('change'));
-  await new Promise(resolve=>setTimeout(resolve,20));
-  assert.equal($('provider').hidden,false);
-  $('provider').value = 'yahoo'; $('provider').dispatchEvent(new window.Event('change'));
-  assert.equal($('mailForm').hidden, false);
-  assert.equal($('imapHost').value, 'imap.mail.yahoo.com');
-  $('mailCloudEnabled').checked = true; $('mailConsent').checked = true;
-  $('mailEmail').value = 'owner@yahoo.com'; $('mailPassword').value = 'fake-app-password';
-  $('mailForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(requests[0].payload.password, 'fake-app-password');
-  assert.equal(requests[0].payload.provider, 'yahoo');
-  assert.equal($('mailPassword').value, '');
-  assert.doesNotMatch(JSON.stringify(writes), /fake-app-password/);
-  window.chrome.runtime.sendMessage = async () => ({ status: 'error', message: 'Unknown request.' });
-  $('mailPassword').value = 'second-fake-password';
-  $('mailForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.match($('accounts').textContent, /Обновите CodeSnap/);
-  assert.equal($('mailPassword').value, '');
-  $('provider').value = 'yandex'; $('provider').dispatchEvent(new window.Event('change'));
-  assert.equal($('mailCredentials').open,false);
-  const before=requests.length;
+
+  assert.equal($('provider').hidden, false);
+  for (const provider of ['gmail', 'yandex', 'outlook', 'yahoo', 'mailru', 'proton', 'icloud', 'zoho', 'rambler', 'fastmail', 'aol', 'gmx']) {
+    assert.ok($('provider').querySelector(`option[value="${provider}"]`), `missing provider ${provider}`);
+  }
+  assert.equal($('localWebmailEnabled').checked, true);
+
+  $('provider').value = 'outlook';
+  $('provider').dispatchEvent(new window.Event('change'));
+  assert.equal($('localProviderHint').hidden, false);
+  assert.equal($('localApiForm').hidden, false);
+  assert.equal($('outlookFields').hidden, false);
+  assert.equal($('fastmailFields').hidden, true);
+
   $('connect').click();
-  await new Promise(resolve => setTimeout(resolve,20));
-  assert.equal(requests.length,before,'no server contact before explicit consent');
-  $('mailCloudEnabled').checked=false; $('mailConsent').checked=true;
-  window.chrome.runtime.sendMessage=async request=>{ requests.push(request); return {status:'error',message:'test OAuth rejection'}; };
-  $('connect').click();
-  await new Promise(resolve => setTimeout(resolve,20));
-  assert.equal(requests.length,before,'connecting never automatically enables Cloud');
-  $('mailCloudEnabled').checked=true;
-  $('connect').click();
-  await new Promise(resolve => setTimeout(resolve,20));
-  assert.equal(requests.at(-1).type,'MAIL_YANDEX_CONNECT','main connect button launches official OAuth without email or password');
-  assert.equal($('mailCloudEnabled').checked,true);
-  assert.equal($('accounts').textContent,'test OAuth rejection');
-  $('mailPassword').value='must-clear-on-disable';
-  $('mailCloudEnabled').checked=false; $('mailCloudEnabled').dispatchEvent(new window.Event('change'));
-  await new Promise(resolve=>setTimeout(resolve,20));
-  assert.equal($('provider').hidden,true);
-  assert.equal($('mailForm').hidden,true);
-  assert.equal($('cloudStorageDetails').hidden,true);
-  assert.equal($('mailPassword').value,'');
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(JSON.parse(JSON.stringify(requests.at(-1))), { type: 'LOCAL_MAIL_ACTION', payload: { command: 'connect', provider: 'outlook' } });
+
+  $('provider').value = 'fastmail';
+  $('provider').dispatchEvent(new window.Event('change'));
+  assert.equal($('fastmailFields').hidden, false);
+  $('fastmailToken').value = 'fmu1-secret-token';
+  $('localApiForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(requests.at(-1).payload.provider, 'fastmail_jmap');
+  assert.equal($('fastmailToken').value, '');
   dom.window.close();
 });

@@ -1,12 +1,12 @@
 {
   "appName": {
-    "message": "CodeSnap – коды подтверждения из почты"
+    "message": "CodeSnap – коды подтверждения и ссылки активации"
   },
   "appDescription": {
-    "message": "Коды из Gmail и Яндекса рядом с полем. Вставка одним нажатием. Yahoo, Mail.ru и IMAP через Cloud без установки программ."
+    "message": "Находит коды и ссылки подтверждения в Gmail, Яндексе, Outlook, Yahoo, Mail.ru и других почтах — полностью локально в браузере."
   },
   "tagline": {
-    "message": "Ваши коды из почты прямо там, где они нужны."
+    "message": "Коды и ссылки активации из почты — 100% локально."
   },
   "currentWebsite": {
     "message": "ТЕКУЩИЙ САЙТ"
@@ -18,7 +18,7 @@
     "message": "Поиск поля подтверждения"
   },
   "lookingForCode": {
-    "message": "Поиск кода в почте…"
+    "message": "Поиск кода или ссылки в почте…"
   },
   "checkAgain": {
     "message": "↻ Проверить снова"
@@ -35,6 +35,9 @@
   "badgeReady": {
     "message": "Код из почты готов"
   },
+  "badgeLinkReady": {
+    "message": "Ссылка активации"
+  },
   "badgeFound": {
     "message": "Поле кода найдено"
   },
@@ -44,23 +47,41 @@
   "desc2fa": {
     "message": "Это поле требует код из приложения-аутентификатора."
   },
+  "desc2faRecovery": {
+    "message": "Это поле требует резервный код восстановления."
+  },
+  "desc2faHardware": {
+    "message": "Это поле требует аппаратный ключ или passkey."
+  },
   "descSms": {
     "message": "Это поле требует код из СМС-сообщения."
   },
   "descEmail": {
     "message": "Подходящий код из письма появится рядом с полем."
   },
+  "descLinkPrompt": {
+    "message": "Обнаружена страница ожидания подтверждения. Ищем ссылку активации в почте…"
+  },
   "descUnknown": {
-    "message": "Убедитесь в источнике кода перед поиском в Gmail."
+    "message": "Убедитесь в источнике кода перед поиском в почте."
   },
   "descManual": {
-    "message": "Поле кода пока не обнаружено. Можно поискать в Gmail."
+    "message": "Поле кода пока не обнаружено. Можно поискать код или ссылку в почте."
   },
   "tapToInsert": {
     "message": "Вставить ↗"
   },
   "tapToCopy": {
     "message": "Скопировать ↗"
+  },
+  "tapToOpenLink": {
+    "message": "Открыть ссылку подтверждения ↗"
+  },
+  "copyLink": {
+    "message": "Скопировать ссылку"
+  },
+  "linkOpened": {
+    "message": "Ссылка активации открыта в новой вкладке."
   },
   "codeInserted": {
     "message": "Код вставлен. Завершите действие на сайте."
@@ -74,8 +95,11 @@
   "chooseAccount": {
     "message": "Выбрать почтовый аккаунт"
   },
+  "mailProviderLabel": {
+    "message": "Почтовый сервис"
+  },
   "allAccounts": {
-    "message": "Все подключенные аккаунты"
+    "message": "Все подключенные источники"
   },
   "connectGmail": {
     "message": "Подключить почту"
@@ -84,46 +108,46 @@
     "message": "Удалить выбранный"
   },
   "connectPrompt": {
-    "message": "Подключите почту, чтобы находить коды."
+    "message": "Подключите Gmail или откройте вкладку с любой почтой для локального поиска."
   },
-  "privacyDisclaimer": {
-    "message": "Gmail подключается напрямую к Google. CodeSnap Cloud обрабатывает недавние IMAP-письма и хранит данные подключения зашифрованными на нашем сервере. Не отправляет и не удаляет письма."
+  "directMailPrivacy": {
+    "message": "100% локально в браузере. Без серверов CodeSnap и без сторонних программ. Письма не отправляются и не удаляются."
   },
   "privacyLink": {
     "message": "Конфиденциальность"
   },
   "codesBesideFields": {
-    "message": "Коды рядом с полями"
+    "message": "Коды и ссылки рядом с полями"
   },
   "autoAppear": {
-    "message": "Появляются автоматически. Нажмите на код для вставки."
+    "message": "Появляются автоматически. Нажмите для вставки или перехода."
   },
   "proHeadline": {
     "message": "Всё для мгновенного и удобного подтверждения."
   },
   "proFeatAccounts": {
-    "message": "✓ Несколько почтовых аккаунтов"
+    "message": "✓ 12+ почтовых сервисов"
   },
   "proFeatBeside": {
-    "message": "✓ Коды рядом с полями"
+    "message": "✓ Коды и ссылки рядом с полями"
   },
   "proFeatSpeed": {
-    "message": "✓ Быстрый активный поиск"
+    "message": "✓ Быстрый локальный поиск"
   },
   "proFeatMatch": {
-    "message": "✓ Улучшенное распознавание"
+    "message": "✓ Умное сопоставление сайтов"
   },
   "proFeatAdFree": {
-    "message": "✓ Без рекламы"
+    "message": "✓ 100% локально и без рекламы"
   },
   "proNote": {
-    "message": "Pro-функции разблокированы в этой сборке. Оплата пока не требуется."
+    "message": "Все функции работают полностью локально в вашем браузере без серверов."
   },
   "footerTrust": {
-    "message": "CodeSnap никогда не отправляет форму за вас."
+    "message": "CodeSnap никогда не отправляет формы и не открывает ссылки без вашего клика."
   },
   "inlineChoose": {
-    "message": "Выберите письмо с нужным кодом"
+    "message": "Выберите нужное письмо"
   },
   "inlineJustNow": {
     "message": "только что"
@@ -134,8 +158,14 @@
   "inlineFill": {
     "message": "Вставить"
   },
+  "inlineOpenLink": {
+    "message": "Открыть ссылку"
+  },
+  "inlineOpenShort": {
+    "message": "Ссылка"
+  },
   "detailedPopupDescription": {
-    "message": "Код, отправитель, аккаунт и время рядом с полем."
+    "message": "Код, ссылка, отправитель, аккаунт и время рядом с полем."
   },
   "inlineChooseShort": {
     "message": "Выбрать"
@@ -144,7 +174,7 @@
     "message": "мин назад"
   },
   "inlineExpired": {
-    "message": "Код истёк. Найдите новый."
+    "message": "Срок истёк. Найдите снова."
   },
   "detailedPopupTitle": {
     "message": "Подробная всплывашка"
@@ -153,42 +183,75 @@
     "message": "Не удалось вставить"
   },
   "inlineReview": {
-    "message": "Проверьте отправителя и тему перед вставкой"
+    "message": "Проверьте отправителя и тему перед действием"
   },
   "inlineLatest": {
     "message": "НОВЫЙ"
   },
-  "mailCloudTitle": {
-    "message": "Почта через CodeSnap Cloud"
+  "localWebmailTitle": {
+    "message": "Локальное чтение вкладок почты"
   },
-  "mailCloudDescription": {
-    "message": "Яндекс, Mail.ru, Yahoo и IMAP без установки программ. Gmail подключается напрямую."
+  "localWebmailDescription": {
+    "message": "Читает свежие коды и ссылки подтверждения локально из открытых вкладок Яндекс, Outlook, Yahoo, Mail.ru, Proton, iCloud, Zoho, Rambler, Fastmail, AOL и GMX без паролей."
   },
-  "mailCloudStorage": {
-    "message": "Пароли приложений и OAuth-токены шифруются на сервере CodeSnap. Письма обрабатываются в памяти, не сохраняются на диск. Выключение Cloud приостанавливает доступ; сначала удалите аккаунты, чтобы удалить их данные с сервера."
+  "localApiOptional": {
+    "message": "Прямой локальный API (без открытой вкладки, необязательно)"
   },
-  "mailCloudConsent": {
-    "message": "Разрешаю серверу CodeSnap хранить данные подключения зашифрованными и читать недавние письма для поиска кодов. Удаление аккаунта удаляет его данные подключения с сервера."
+  "fastmailTokenLabel": {
+    "message": "Fastmail API token (JMAP, только чтение)"
   },
-  "mailCloudConnect": {
-    "message": "Подключить почту"
+  "outlookClientIdLabel": {
+    "message": "Microsoft App Client ID (OAuth PKCE)"
   },
-  "mailCloudEnableFirst": {
-    "message": "Включите «Почта через CodeSnap Cloud» в настройках ниже, затем подтвердите подключение в форме."
+  "connectLocalApi": {
+    "message": "Подключить API локально"
   },
-  "mailCloudConsentRequired": {
-    "message": "Подтвердите чтение писем сервером CodeSnap галочкой в форме подключения."
+  "cmdFillCode": {
+    "message": "Найти и вставить код подтверждения"
   },
-  "connectYandexOAuth": {
-    "message": "Войти через Яндекс"
+  "contextMenuFill": {
+    "message": "CodeSnap: Найти и вставить код подтверждения"
   },
-  "yandexOAuthHint": {
-    "message": "Вход откроется на официальном сайте Яндекса. Наш сервер читает письма через IMAP: Chrome не поддерживает это соединение напрямую. Устанавливать программы не нужно."
+  "totpTitle": {
+    "message": "2FA Аутентификатор"
   },
-  "mailPasswordAlternative": {
-    "message": "Запасной вариант: пароль приложения"
+  "totpAddToggle": {
+    "message": "+ Добавить 2FA"
   },
-  "directMailPrivacy": {
-    "message": "Gmail подключается напрямую к Google. CodeSnap не отправляет и не удаляет письма."
+  "totpScanPage": {
+    "message": "Сканировать QR / ключ со страницы"
+  },
+  "totpInputLabel": {
+    "message": "Секретный ключ Base32 или otpauth://"
+  },
+  "totpIssuerLabel": {
+    "message": "Название сервиса / сайта"
+  },
+  "totpSave": {
+    "message": "Сохранить 2FA локально"
+  },
+  "dualFillAction": {
+    "message": "⚡ Вставить оба кода (Почта + 2FA)"
+  },
+  "dualInserted": {
+    "message": "Оба кода (Почта и 2FA) вставлены."
+  },
+  "autoClearTitle": {
+    "message": "Автоочистка буфера обмена"
+  },
+  "autoClearDescription": {
+    "message": "Очищать скопированный код из буфера обмена через 45 секунд."
+  },
+  "muteThisSite": {
+    "message": "Не показывать чип на этом сайте"
+  },
+  "unmuteThisSite": {
+    "message": "Включить чип на этом сайте"
+  },
+  "muteSiteInline": {
+    "message": "Скрыть на этом сайте"
+  },
+  "inlineExpiredShort": {
+    "message": "Истёк"
   }
 }

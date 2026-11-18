@@ -1,8 +1,30 @@
-import { siteForOrigin, trustedOrigin, normalizeSender, rankCandidates, candidateIsFresh, SEARCH_WINDOW_SECONDS } from './core.js';
+import { siteForOrigin, trustedOrigin, normalizeSender, rankCandidates, candidateIsFresh, siteIdentity, subjectMatches, SEARCH_WINDOW_SECONDS } from './core.js';
 import { findMessages, findHistoryMessages, getGmailHistoryId } from './gmail.js';
 import { SessionStore } from './sessions.js';
 import { getAccessTokens, forgetAdditional } from './auth.js';
-import { mailHost, listMailAccounts, describeMailError, connectYandex } from './mail-bridge.js';
+import {
+  scanLocalMail,
+  listLocalMailAccounts,
+  registerWebmailTab,
+  unregisterWebmailTab,
+  connectLocalProvider,
+  removeLocalAccount,
+  focusWebmailTab,
+  describeLocalMailError,
+  isLocalWebmailEnabled,
+  detectWebmailProviderFromUrl
+} from './local-mail.js';
+import {
+  getTotpVaultStatus,
+  unlockTotpVault,
+  lockTotpVault,
+  setTotpPassphrase,
+  addTotpAccount,
+  removeTotpAccount,
+  getTotpForSite,
+  getTotpById,
+  describeTotpError
+} from './totp.js';
 
 const sessions = new SessionStore();
 const errors = {
@@ -14,9 +36,27 @@ const errors = {
 
 function originOf(url) { try { return new URL(url).origin; } catch { return null; } }
 const sessionKey = (tabId, frameId = 0) => `${tabId}:${frameId}`;
-const isCloudCandidate = item => Boolean(item?.accountProvider && item.accountProvider !== 'gmail');
+const isWebmailCandidate = item => item?.localSource === 'webmail';
+
 async function candidateEnabled(item) {
-  return !isCloudCandidate(item) || (await chrome.storage.local.get('mailCloudEnabled')).mailCloudEnabled === true;
+  return !isWebmailCandidate(item) || await isLocalWebmailEnabled();
+}
+
+function candidatePayload(candidate, sessionId, inline = false) {
+  return {
+    status: inline && candidate.requiresReview ? 'review' : 'found',
+    kind: candidate.kind ?? (candidate.code && candidate.link ? 'both' : candidate.link ? 'link' : 'code'),
+    code: candidate.code ?? null,
+    link: candidate.link ?? null,
+    timestamp: candidate.timestamp,
+    lifetimeSeconds: candidate.lifetimeSeconds,
+    from: candidate.from,
+    subject: candidate.subject,
+    requiresReview: candidate.requiresReview,
+    accountEmail: candidate.accountEmail,
+    accountProvider: candidate.accountProvider,
+    sessionId
+  };
 }
 
 async function tabMatches(tabId, origin, fieldId = null, frameId = 0) {
@@ -35,6 +75,19 @@ async function rememberedSenders(siteId, origin) {
   return [...new Set([senders[key], ...(Array.isArray(learnedSenders[key]) ? learnedSenders[key] : [])].map(normalizeSender).filter(Boolean))];
 }
 
+function matchingUnreadHint(hints, origin, siteId, siteContext) {
+  if (!hints?.length) return null;
+  const identity = siteIdentity(origin, siteContext);
+  return hints.find(hint => {
+    const text = `${hint.from ?? ''} ${hint.subject ?? ''}`.toLowerCase();
+    const fromAddr = normalizeSender(hint.from);
+    const domain = fromAddr?.split('@')[1] ?? '';
+    const domainHit = Boolean(identity.siteDomain && domain && (domain === identity.siteDomain || domain.endsWith(`.${identity.siteDomain}`)));
+    const brandHit = identity.names.some(name => text.includes(name));
+    return (domainHit || brandHit) && subjectMatches(hint.subject ?? '', siteId);
+  }) ?? null;
+}
+
 async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, detectedAt = null, siteContext = {}, accountSelection = null, channel = 'unknown', automatic = false, inline = false }) {
   const key = sessionKey(tabId, frameId);
   if (!origin?.startsWith('https://') || !(await tabMatches(tabId, origin, fieldId, frameId))) return { status: 'changed', message: 'The verification page changed. Try again.' };
@@ -46,16 +99,20 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
   if (trusted && siteForOrigin(origin) !== siteId) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
   const learnedSenders = await rememberedSenders(siteId, origin);
   const startedAt = Number.isFinite(detectedAt) && detectedAt <= Date.now() + 30_000 && detectedAt > Date.now() - 300_000 ? detectedAt : null;
-  const { accountSelections = {}, mailCloudEnabled } = await chrome.storage.local.get(['accountSelections', 'mailCloudEnabled']);
+  const { accountSelections = {}, learnedAccounts = {} } = await chrome.storage.local.get(['accountSelections', 'learnedAccounts']);
+  const preferredAccount = learnedAccounts?.[origin] ?? null;
+  const webmailOn = await isLocalWebmailEnabled();
   let selected = accountSelection ?? accountSelections[origin] ?? 'all';
-  if (selected.startsWith('mail:') && mailCloudEnabled !== true) selected = 'all';
+  if ((selected.startsWith('local:tab:') || selected.startsWith('local:pin:')) && !webmailOn) selected = 'all';
   const searchKeyBase = `${siteId}|${learnedSenders.join(',')}|${selected}`;
   const searchKey = `${searchKeyBase}|${automatic ? 'auto' : 'manual'}`;
   let previous = sessions.get(key);
   if (previous && !await candidateEnabled(previous)) { sessions.delete(key); previous = null; }
   const codeNotReplaced = !previous?.used && (!detectedAt || !previous?.timestamp || previous.timestamp >= detectedAt - 5000);
   const sameContext = previous?.origin === origin && (previous.fieldId === fieldId || !fieldId || !previous.fieldId) && previous.searchKeyBase === searchKeyBase && Date.now() - previous.created < SEARCH_WINDOW_SECONDS * 1000;
-  if (sameContext && previous.status === 'found' && codeNotReplaced && candidateIsFresh(previous)) return { status: inline && previous.requiresReview ? 'review' : 'found', code: previous.code, timestamp: previous.timestamp, lifetimeSeconds: previous.lifetimeSeconds, from: previous.from, subject: previous.subject, requiresReview: previous.requiresReview, accountEmail: previous.accountEmail, accountProvider: previous.accountProvider, sessionId: previous.sessionId };
+  if (sameContext && previous.status === 'found' && codeNotReplaced && candidateIsFresh(previous)) {
+    return candidatePayload(previous, previous.sessionId, inline);
+  }
   const reusable = sameContext && previous.searchKey === searchKey;
   const session = reusable && previous.status === 'waiting' ? previous : sessions.start(key, origin, siteId, { startedAt, fieldId, siteContext });
   session.searchKeyBase = searchKeyBase;
@@ -69,17 +126,27 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
     if (selected === 'all' || selected === 'primary' || selected.startsWith('extra:')) {
       try { accounts = await getAccessTokens(selected); } catch (error) { googleError = error; }
     }
-    let mailAccounts = [], mailError = null;
-    if (selected === 'all' || selected.startsWith('mail:')) {
-      try { mailAccounts = (await listMailAccounts(true)).filter(account => selected === 'all' || selected === `mail:${account.id}`); }
-      catch (error) { mailError = error; }
+    let localAccounts = [];
+    if (selected === 'all' || selected.startsWith('local:')) {
+      localAccounts = await listLocalMailAccounts();
+      if (selected.startsWith('local:')) {
+        localAccounts = localAccounts.filter(item => `local:${item.id}` === selected);
+      }
     }
-    if (!accounts.length && !mailAccounts.length) throw mailError ?? googleError ?? new Error(selected.startsWith('mail:') ? 'MAIL_AUTH_FAILED' : 'AUTH_EXPIRED');
+    const hasActiveLocal = localAccounts.some(item => item.active);
+    if (!accounts.length && !hasActiveLocal) {
+      if (selected.startsWith('local:') && localAccounts.length) {
+        return { status: 'none', message: 'Откройте вкладку выбранной почты, чтобы CodeSnap прочитал свежее письмо локально.' };
+      }
+      throw googleError ?? new Error('AUTH_EXPIRED');
+    }
+
+    let lastUnreadHints = [];
     async function fetchAccounts(broad = false) {
-      const nativePending = Promise.allSettled(mailAccounts.map(async account => {
-        const result = await mailHost({ command: 'search', id: account.id, maxAgeSeconds: SEARCH_WINDOW_SECONDS });
-        return result.messages.map(message => ({ ...message, accountEmail: account.email, accountProvider: account.provider }));
-      }));
+      const localPending = (selected === 'all' || selected.startsWith('local:'))
+        ? scanLocalMail({ selected, excludeTabId: tabId, maxAgeSeconds: SEARCH_WINDOW_SECONDS })
+        : Promise.resolve({ messages: [], unreadHints: [] });
+
       const results = await Promise.allSettled(accounts.map(async account => {
         try {
           session.historyIds ??= {};
@@ -112,18 +179,31 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
           throw error;
         }
       }));
-      const nativeResults = await nativePending;
-      const combined = [...results, ...nativeResults];
-      if (combined.every(result => result.status === 'rejected')) throw combined[0].reason;
-      return combined.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+
+      const localScan = await localPending;
+      lastUnreadHints = localScan.unreadHints ?? [];
+      if (accounts.length > 0 && !hasActiveLocal && results.every(result => result.status === 'rejected')) {
+        throw results[0].reason;
+      }
+      const gmailMessages = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+      return [...gmailMessages, ...(localScan.messages ?? [])];
     }
+
     const messages = await fetchAccounts();
     if (sessions.get(key)?.sessionId !== sessionId || session.searchSeq !== searchSeq || !(await tabMatches(tabId, origin, fieldId, frameId))) {
       return { status: 'changed', message: 'Tab changed. Search again.' };
     }
     const rank = async items => {
-      const { mailCloudEnabled } = await chrome.storage.local.get('mailCloudEnabled');
-      return rankCandidates(items.filter(item => !isCloudCandidate(item) || mailCloudEnabled === true), { siteId, learnedSenders, origin, siteContext, startedAt: automatic ? startedAt : null, startToleranceMs: 180_000 });
+      const enabledNow = await isLocalWebmailEnabled();
+      return rankCandidates(items.filter(item => !isWebmailCandidate(item) || enabledNow), {
+        siteId,
+        learnedSenders,
+        preferredAccount,
+        origin,
+        siteContext,
+        startedAt: automatic ? startedAt : null,
+        startToleranceMs: 180_000
+      });
     };
     let ranked = await rank(messages);
     if ((ranked.status === 'none' || ranked.status === 'old') && (!automatic || searchSeq === 1 || session.historyReset || !Object.keys(session.historyIds ?? {}).length)) {
@@ -136,25 +216,54 @@ async function search({ tabId, frameId = 0, origin, siteId, fieldId = null, dete
     }
     if (ranked.status === 'found') {
       sessions.set(key, { ...session, status: 'found', ...ranked.candidate });
-      return { status: inline && ranked.candidate.requiresReview ? 'review' : 'found', code: ranked.candidate.code, timestamp: ranked.candidate.timestamp, lifetimeSeconds: ranked.candidate.lifetimeSeconds, from: ranked.candidate.from, subject: ranked.candidate.subject, requiresReview: ranked.candidate.requiresReview, accountEmail: ranked.candidate.accountEmail, accountProvider: ranked.candidate.accountProvider, sessionId };
+      return candidatePayload(ranked.candidate, sessionId, inline);
     }
     if (ranked.status === 'ambiguous') {
       sessions.set(key, { ...session, status: 'ambiguous', candidates: ranked.candidates });
-      return { status: 'ambiguous', message: 'Several recent codes found. Choose the email you requested.', candidates: ranked.candidates.map(({ code, timestamp, accountEmail, accountProvider, from, subject, lifetimeSeconds, requiresReview }, index) => ({ code, timestamp, accountEmail, accountProvider, from, subject, lifetimeSeconds, requiresReview, index })), sessionId };
+      return {
+        status: 'ambiguous',
+        message: 'Several recent matches found. Choose the email you requested.',
+        candidates: ranked.candidates.map(({ kind, code, link, timestamp, accountEmail, accountProvider, from, subject, lifetimeSeconds, requiresReview }, index) => ({
+          kind,
+          code,
+          link,
+          timestamp,
+          accountEmail,
+          accountProvider,
+          from,
+          subject,
+          lifetimeSeconds,
+          requiresReview,
+          index
+        })),
+        sessionId
+      };
     }
     sessions.set(key, { ...session, status: 'waiting' });
+    const unreadHint = ranked.status === 'none' ? matchingUnreadHint(lastUnreadHints, origin, siteId, siteContext) : null;
+    if (unreadHint) {
+      return {
+        status: 'webmail_unread',
+        webmailTabId: unreadHint.tabId,
+        accountProvider: unreadHint.provider,
+        accountEmail: unreadHint.accountEmail ?? null,
+        from: unreadHint.from,
+        subject: unreadHint.subject,
+        message: 'В открытой вкладке почты есть свежее письмо. Откройте вкладку или письмо для чтения.'
+      };
+    }
     return { status: ranked.status, message: ranked.status === 'old' ? 'Old code.' : `No recent ${siteId === 'generic' ? '' : siteId + ' '}verification email.` };
   } catch (error) {
     if (sessions.get(key)?.sessionId === sessionId && session.searchSeq === searchSeq) sessions.delete(key);
-    return { status: 'error', message: errors[error.message] ?? (error.message.startsWith('MAIL_') ? describeMailError(error) : 'Connect a mail account in CodeSnap.') };
+    return { status: 'error', message: errors[error.message] ?? (error.message.startsWith('LOCAL_') ? describeLocalMailError(error) : 'Connect a mail account in CodeSnap.') };
   }
 }
 
 async function insert({ tabId, frameId = 0, origin, sessionId }) {
   const key = sessionKey(tabId, frameId);
   const item = sessions.valid(key, origin, sessionId);
-  if (!item) return { status: 'expired', message: 'Code expired. Search again.' };
-  if (!await candidateEnabled(item)) { sessions.delete(key); return { status: 'expired', message: 'Cloud mail is disabled.' }; }
+  if (!item || !item.code) return { status: 'expired', message: 'Code expired. Search again.' };
+  if (!await candidateEnabled(item)) { sessions.delete(key); return { status: 'expired', message: 'Local webmail is disabled.' }; }
   if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
   if (item.siteId !== 'generic' && !trustedOrigin(origin, item.siteId)) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
   try {
@@ -167,18 +276,272 @@ async function insert({ tabId, frameId = 0, origin, sessionId }) {
   } catch { return { status: 'error', message: 'Open the website and try again.' }; }
 }
 
+async function openLink({ tabId, frameId = 0, origin, sessionId }) {
+  const key = sessionKey(tabId, frameId);
+  const item = sessions.valid(key, origin, sessionId);
+  if (!item || !item.link?.url) return { status: 'expired', message: 'Link expired. Search again.' };
+  if (!await candidateEnabled(item)) { sessions.delete(key); return { status: 'expired', message: 'Local webmail is disabled.' }; }
+  if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
+  if (item.siteId !== 'generic' && !trustedOrigin(origin, item.siteId)) return { status: 'untrusted', message: 'Untrusted website — action disabled.' };
+  let parsed;
+  try { parsed = new URL(item.link.url); } catch { return { status: 'error', message: 'Invalid verification link.' }; }
+  if (parsed.protocol !== 'https:') return { status: 'error', message: 'Only HTTPS links are supported.' };
+  try { await rememberSender(item); } catch { /* Best effort. */ }
+  sessions.delete(key);
+  await chrome.tabs.create({ url: parsed.href, active: true });
+  return { status: 'opened', url: parsed.href };
+}
+
 async function rememberSender(item) {
   const address = normalizeSender(item.from);
-  if (!address) return;
+  const accountEmail = normalizeSender(item.accountEmail);
+  if (!address && !accountEmail) return;
   const key = item.siteId === 'generic' ? item.origin : item.siteId;
-  const { learnedSenders = {} } = await chrome.storage.local.get('learnedSenders');
-  learnedSenders[key] = [...new Set([...(Array.isArray(learnedSenders[key]) ? learnedSenders[key] : []).map(normalizeSender).filter(Boolean), address])].slice(-5);
-  await chrome.storage.local.set({ learnedSenders });
+  const { learnedSenders = {}, learnedAccounts = {} } = await chrome.storage.local.get(['learnedSenders', 'learnedAccounts']);
+  const payload = {};
+  if (address) {
+    learnedSenders[key] = [...new Set([...(Array.isArray(learnedSenders[key]) ? learnedSenders[key] : []).map(normalizeSender).filter(Boolean), address])].slice(-5);
+    payload.learnedSenders = learnedSenders;
+  }
+  if (item.origin && accountEmail) {
+    learnedAccounts[item.origin] = accountEmail;
+    payload.learnedAccounts = learnedAccounts;
+  }
+  if (Object.keys(payload).length) {
+    await chrome.storage.local.set(payload);
+  }
+}
+
+async function insertDual({ tabId, frameId = 0, origin, sessionId, siteContext = {} }) {
+  const key = sessionKey(tabId, frameId);
+  const item = sessions.valid(key, origin, sessionId);
+  if (!item || !item.code) return { status: 'expired', message: 'Email code expired. Search again.' };
+  if (!await candidateEnabled(item)) { sessions.delete(key); return { status: 'expired', message: 'Local webmail is disabled.' }; }
+  if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
+  if (item.siteId !== 'generic' && !trustedOrigin(origin, item.siteId)) return { status: 'untrusted', message: 'Untrusted website — insertion disabled.' };
+  const totp = await getTotpForSite(origin, siteContext ?? item.siteContext ?? {});
+  if (totp.status !== 'found') {
+    return { status: totp.status === 'locked' ? 'locked' : 'error', message: totp.status === 'locked' ? 'Unlock 2FA in CodeSnap popup.' : 'No matching 2FA secret found.' };
+  }
+  try {
+    const result = await chrome.tabs.sendMessage(tabId, {
+      type: 'INSERT_DUAL',
+      emailCode: item.code,
+      totpCode: totp.code,
+      origin,
+      sessionId,
+      fieldId: item.fieldId
+    }, { frameId });
+    if (result?.status === 'inserted_dual' || result?.status === 'inserted_email_only') {
+      try { await rememberSender(item); } catch { /* Best effort. */ }
+      sessions.delete(key);
+    }
+    return result ?? { status: 'error', message: 'Verification fields not found.' };
+  } catch {
+    return { status: 'error', message: 'Open the website and try again.' };
+  }
+}
+
+async function handleWebmailPush(request, sender) {
+  if (!sender.tab?.id) return { status: 'ignored' };
+  const senderProvider = detectWebmailProviderFromUrl(sender.url || '') || detectWebmailProviderFromUrl(sender.tab?.url || '');
+  if (!senderProvider || senderProvider !== request.provider) return { status: 'ignored' };
+  registerWebmailTab({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, provider: request.provider, accountEmail: request.accountEmail });
+  if (!request.messages?.length && !request.unreadHints?.length) return { status: 'ok' };
+  if (!(await isLocalWebmailEnabled())) return { status: 'disabled' };
+
+  const { accountSelections = {}, mutedOrigins = [], learnedAccounts = {} } = await chrome.storage.local.get(['accountSelections', 'mutedOrigins', 'learnedAccounts']);
+  let pushedCount = 0;
+
+  for (const [key, session] of sessions.entries()) {
+    const keyStr = String(key);
+    const [tabStr, frameStr] = keyStr.includes(':') ? keyStr.split(':') : [keyStr, '0'];
+    const targetTabId = Number(tabStr);
+    const targetFrameId = Number(frameStr || 0);
+    if (!Number.isInteger(targetTabId) || targetTabId === sender.tab.id) continue;
+    if (Array.isArray(mutedOrigins) && mutedOrigins.includes(session.origin)) continue;
+    if (session.status === 'found' && !session.used && candidateIsFresh(session)) continue;
+    if (Date.now() - session.created > SEARCH_WINDOW_SECONDS * 1000) continue;
+
+    const selected = accountSelections[session.origin] ?? 'all';
+    if (selected !== 'all' && selected !== `local:tab:${sender.tab.id}` && selected !== `local:pin:${request.provider}`) continue;
+
+    const normalized = (request.messages ?? []).map(msg => ({
+      ...msg,
+      accountProvider: msg.accountProvider || request.provider,
+      accountEmail: msg.accountEmail || request.accountEmail || null,
+      localSource: 'webmail',
+      webmailTabId: sender.tab.id
+    }));
+
+    const learnedSenders = await rememberedSenders(session.siteId, session.origin);
+    const ranked = rankCandidates(normalized, {
+      siteId: session.siteId,
+      learnedSenders,
+      preferredAccount: learnedAccounts?.[session.origin] ?? null,
+      origin: session.origin,
+      siteContext: session.siteContext ?? {},
+      startedAt: session.startedAt,
+      startToleranceMs: 180_000
+    });
+
+    if (ranked.status === 'found') {
+      if (!(await tabMatches(targetTabId, session.origin, session.fieldId, targetFrameId))) continue;
+      const latest = sessions.get(key);
+      if (!latest || latest.sessionId !== session.sessionId) continue;
+      sessions.set(key, { ...latest, status: 'found', ...ranked.candidate });
+      chrome.tabs.sendMessage(
+        targetTabId,
+        { ...candidatePayload(ranked.candidate, latest.sessionId, true), type: 'CODE_FOUND', fieldId: latest.fieldId },
+        { frameId: targetFrameId }
+      ).catch(() => {});
+      pushedCount++;
+    } else if (ranked.status === 'none' && request.unreadHints?.length && session.status === 'waiting') {
+      const hint = matchingUnreadHint(request.unreadHints, session.origin, session.siteId, session.siteContext ?? {});
+      if (hint && await tabMatches(targetTabId, session.origin, session.fieldId, targetFrameId)) {
+        chrome.tabs.sendMessage(
+          targetTabId,
+          {
+            type: 'WEBMAIL_UNREAD_PUSH',
+            fieldId: session.fieldId,
+            webmailTabId: sender.tab.id,
+            accountProvider: request.provider,
+            accountEmail: request.accountEmail ?? null,
+            from: hint.from,
+            subject: hint.subject,
+            message: 'В открытой вкладке почты появилось новое письмо. Откройте вкладку или письмо для чтения.'
+          },
+          { frameId: targetFrameId }
+        ).catch(() => {});
+      }
+    }
+  }
+  return { status: 'ok', pushed: pushedCount };
+}
+
+async function scheduleClipboardClear() {
+  const { autoClearClipboard } = await chrome.storage.local.get('autoClearClipboard');
+  if (autoClearClipboard === false) return false;
+  await chrome.storage.session?.set?.({ clipboardClearActive: true });
+  chrome.alarms?.create?.('codesnap-clear-clipboard', { delayInMinutes: 0.75 });
+  return true;
+}
+
+async function notifyInlineToast(tabId, frameId, text) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'SHOW_INLINE_TOAST', text }, { frameId });
+  } catch { /* Page might not accept messages. */ }
+}
+
+async function triggerQuickFill(tab, info = null) {
+  const tabId = tab?.id;
+  if (!Number.isInteger(tabId)) return { status: 'error', message: 'No active tab.' };
+  const frameId = info?.frameId ?? 0;
+  const status = await chrome.tabs.sendMessage(tabId, { type: 'FIELD_STATUS' }, { frameId }).catch(() => null);
+  const origin = status?.origin || originOf(info?.frameUrl || tab?.url || '');
+  if (!origin?.startsWith('https://')) return { status: 'unsupported', message: 'Open an HTTPS website first.' };
+
+  const siteId = siteForOrigin(origin) ?? 'generic';
+  const siteContext = status?.siteContext ?? {};
+  const totp = await getTotpForSite(origin, siteContext);
+
+  if (status?.isDualField && totp.status === 'found') {
+    const emailRes = await search({ tabId, frameId, origin, siteId, fieldId: status.fieldId, detectedAt: status.detectedAt, siteContext, channel: 'email', automatic: false, inline: false });
+    if (emailRes.status === 'found' && emailRes.code) {
+      const dual = await insertDual({ tabId, frameId, origin, sessionId: emailRes.sessionId, siteContext });
+      if (dual?.status === 'inserted_dual') {
+        await notifyInlineToast(tabId, frameId, '✓ Оба кода (Почта + 2FA) вставлены');
+        return dual;
+      }
+    }
+  }
+
+  if (status?.channel === 'authenticator') {
+    if (totp.status === 'found') {
+      const inserted = await chrome.tabs.sendMessage(tabId, { type: 'INSERT_TOTP', code: totp.code, origin }, { frameId }).catch(() => null);
+      if (inserted?.status === 'inserted') {
+        await notifyInlineToast(tabId, frameId, '✓ Код 2FA вставлен');
+        return { status: 'inserted_totp', code: totp.code };
+      }
+      if (await copyViaOffscreen(totp.code)) {
+        await scheduleClipboardClear();
+        await notifyInlineToast(tabId, frameId, `✓ Код 2FA ${totp.code} скопирован`);
+        return { status: 'copied_totp', code: totp.code };
+      }
+      return { status: 'error' };
+    }
+    await notifyInlineToast(tabId, frameId, totp.status === 'locked' ? '🔒 Разблокируйте 2FA в окне CodeSnap' : 'Добавьте секрет 2FA для этого сайта в CodeSnap');
+    return { status: totp.status };
+  }
+
+  const emailRes = await search({
+    tabId,
+    frameId,
+    origin,
+    siteId,
+    fieldId: status?.fieldId ?? null,
+    detectedAt: status?.detectedAt ?? null,
+    siteContext,
+    channel: 'email',
+    automatic: false,
+    inline: false
+  });
+
+  if (emailRes.status === 'found' && emailRes.code) {
+    if (status?.detected && status.fieldType !== 'link-prompt') {
+      const ins = await insert({ tabId, frameId, origin, sessionId: emailRes.sessionId });
+      if (ins?.status === 'inserted') {
+        await notifyInlineToast(tabId, frameId, '✓ Код подтверждения вставлен');
+        return ins;
+      }
+    }
+    const forced = await chrome.tabs.sendMessage(tabId, { type: 'FORCE_INSERT_ACTIVE', code: emailRes.code, origin }, { frameId }).catch(() => null);
+    if (forced?.status === 'inserted') {
+      const sessionItem = sessions.get(sessionKey(tabId, frameId));
+      if (sessionItem) {
+        try { await rememberSender(sessionItem); } catch { /* Best effort. */ }
+        sessions.delete(sessionKey(tabId, frameId));
+      }
+      await notifyInlineToast(tabId, frameId, '✓ Код вставлен в активное поле');
+      return { status: 'inserted', code: emailRes.code };
+    }
+    if (await copyViaOffscreen(emailRes.code)) {
+      const sessionItem = sessions.get(sessionKey(tabId, frameId));
+      if (sessionItem) {
+        try { await rememberSender(sessionItem); } catch { /* Best effort. */ }
+      }
+      await scheduleClipboardClear();
+      await notifyInlineToast(tabId, frameId, `✓ Код ${emailRes.code} скопирован в буфер`);
+      return { status: 'copied', code: emailRes.code };
+    }
+  }
+
+  if (emailRes.status === 'found' && emailRes.link?.url) {
+    chrome.tabs.sendMessage(tabId, { ...emailRes, type: 'CODE_FOUND', fieldId: status?.fieldId ?? null }, { frameId }).catch(() => {});
+    await notifyInlineToast(tabId, frameId, '🔗 Ссылка активации найдена — нажмите на чип для открытия');
+    return { status: 'link_ready', link: emailRes.link };
+  }
+
+  if (totp.status === 'found') {
+    const forced = await chrome.tabs.sendMessage(tabId, { type: 'FORCE_INSERT_ACTIVE', code: totp.code, origin }, { frameId }).catch(() => null);
+    if (forced?.status === 'inserted') {
+      await notifyInlineToast(tabId, frameId, '✓ Код 2FA вставлен');
+      return { status: 'inserted_totp', code: totp.code };
+    }
+    if (await copyViaOffscreen(totp.code)) {
+      await scheduleClipboardClear();
+      await notifyInlineToast(tabId, frameId, `✓ Код 2FA ${totp.code} скопирован`);
+      return { status: 'copied_totp', code: totp.code };
+    }
+  }
+
+  await notifyInlineToast(tabId, frameId, emailRes.message || 'Свежий код подтверждения не найден');
+  return { status: emailRes.status ?? 'none' };
 }
 
 async function trustCandidate({ tabId, origin, sessionId }) {
   const item = sessions.valid(sessionKey(tabId), origin, sessionId);
-  if (!await candidateEnabled(item)) return { status: 'expired', message: 'Cloud mail is disabled.' };
+  if (!await candidateEnabled(item)) return { status: 'expired', message: 'Local webmail is disabled.' };
   if (!item || !(await tabMatches(tabId, origin, item.fieldId))) return { status: 'expired', message: 'Search again.' };
   await rememberSender(item);
   item.used = true;
@@ -192,22 +555,113 @@ async function selectCandidate({ tabId, frameId = 0, origin, sessionId, index })
   if (!(await tabMatches(tabId, origin, item.fieldId, frameId))) return { status: 'changed', message: 'Tab changed. Search again.' };
   const candidate = item.candidates[index];
   if (!Number.isInteger(index) || index < 0 || !candidate || !candidateIsFresh(candidate)) return { status: 'old', message: 'Old code.' };
-  if (!await candidateEnabled(candidate)) return { status: 'expired', message: 'Cloud mail is disabled.' };
+  if (!await candidateEnabled(candidate)) return { status: 'expired', message: 'Local webmail is disabled.' };
   sessions.set(key, { ...item, status: 'found', candidates: undefined, ...candidate });
-  return { status: 'found', code: candidate.code, timestamp: candidate.timestamp, lifetimeSeconds: candidate.lifetimeSeconds, from: candidate.from, subject: candidate.subject, requiresReview: candidate.requiresReview, accountEmail: candidate.accountEmail, accountProvider: candidate.accountProvider, sessionId };
+  return candidatePayload(candidate, sessionId, false);
 }
 
 chrome.runtime.onMessage.addListener((request, sender, respond) => {
   (async () => {
-    if (request.type === 'MAIL_YANDEX_CONNECT') {
-      if (sender.url !== `chrome-extension://${chrome.runtime.id}/src/popup.html` || request.consent !== true) return { status: 'untrusted', message: 'Invalid page.' };
-      try { return { status: 'ok', ...await connectYandex() }; } catch (error) { return { status: 'error', message: describeMailError(error) }; }
+    if (request.type === 'WEBMAIL_READY' || request.type === 'WEBMAIL_PUSH') {
+      return handleWebmailPush(request, sender);
     }
-    if (request.type === 'MAIL_ACCOUNT') {
+    if (request.type === 'TOTP_ACTION') {
+      const isPopup = sender.url === `chrome-extension://${chrome.runtime?.id}/src/popup.html` || (!sender.tab && !sender.url);
+      if (!isPopup) return { status: 'untrusted', message: 'Invalid page.' };
+      const payload = request.payload ?? {};
+      const command = payload.command;
+      try {
+        if (command === 'status') {
+          const vaultStatus = await getTotpVaultStatus();
+          const siteMatch = payload.origin ? await getTotpForSite(payload.origin, payload.siteContext ?? {}) : { status: 'none' };
+          return { status: 'ok', ...vaultStatus, siteMatch };
+        }
+        if (command === 'add') return { status: 'ok', ...await addTotpAccount(payload.input, payload.meta ?? {}) };
+        if (command === 'add_entries') {
+          const list = Array.isArray(payload.entries) ? payload.entries : [];
+          if (!list.length) return { status: 'error', message: 'Не найдено ни одной 2FA-записи.' };
+          const added = [];
+          for (const item of list) {
+            added.push(await addTotpAccount(item.secret, {
+              issuer: item.issuer,
+              account: item.account,
+              domain: item.domain,
+              algorithm: item.algorithm,
+              digits: item.digits,
+              period: item.period
+            }));
+          }
+          return { status: 'ok', count: added.length, first: added[0], added };
+        }
+        if (command === 'scan_add') {
+          if (!Number.isInteger(payload.tabId)) return { status: 'error', message: 'Откройте вкладку с настройкой 2FA.' };
+          const scan = await chrome.tabs.sendMessage(payload.tabId, { type: 'SCAN_PAGE_TOTP' }, { frameId: 0 }).catch(() => null);
+          if (scan?.status !== 'found') {
+            return { status: 'error', message: scan?.message || 'На странице не найден QR-код или секретный ключ 2FA.' };
+          }
+          const added = await addTotpAccount(scan.uri || scan.secret, { issuer: scan.issuer, domain: scan.domain });
+          return { status: 'ok', source: scan.source, ...added };
+        }
+        if (command === 'remove') return { status: 'ok', ...await removeTotpAccount(payload.id) };
+        if (command === 'unlock') return { status: 'ok', ...await unlockTotpVault(payload.passphrase) };
+        if (command === 'lock') return { status: 'ok', ...await lockTotpVault() };
+        if (command === 'set_pin') return { status: 'ok', ...await setTotpPassphrase(payload.newPassphrase, payload.currentPassphrase) };
+        if (command === 'code_by_id') return { status: 'ok', ...await getTotpById(payload.id) };
+        if (command === 'insert_totp') {
+          const totp = payload.id ? await getTotpById(payload.id) : await getTotpForSite(payload.origin, payload.siteContext ?? {});
+          if (totp.status !== 'found') return { status: 'error', message: totp.status === 'locked' ? 'Разблокируйте 2FA PIN-кодом.' : 'Подходящий 2FA-секрет не найден.' };
+          if (!Number.isInteger(payload.tabId) || !(await tabMatches(payload.tabId, payload.origin))) {
+            return { status: 'changed', message: 'The verification page changed.' };
+          }
+          const res = await chrome.tabs.sendMessage(payload.tabId, { type: 'INSERT_TOTP', code: totp.code, origin: payload.origin }, { frameId: 0 });
+          return res ?? { status: 'error', message: '2FA field not found.' };
+        }
+        return { status: 'untrusted', message: 'Invalid request.' };
+      } catch (error) {
+        return { status: 'error', message: describeTotpError(error) };
+      }
+    }
+    if (request.type === 'GET_TOTP_INLINE') {
+      if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
+      return getTotpForSite(request.origin, request.siteContext ?? {});
+    }
+    if (request.type === 'INSERT_TOTP_INLINE') {
+      if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
+      const totp = await getTotpForSite(request.origin, request.siteContext ?? {});
+      if (totp.status !== 'found') return { status: totp.status === 'locked' ? 'locked' : 'expired', message: '2FA code unavailable.' };
+      return chrome.tabs.sendMessage(sender.tab.id, { type: 'INSERT_TOTP', code: totp.code, origin: request.origin }, { frameId: sender.frameId ?? 0 });
+    }
+    if (request.type === 'INSERT_DUAL_INLINE') {
+      if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
+      return insertDual({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: request.origin, sessionId: request.sessionId, siteContext: request.siteContext ?? {} });
+    }
+    if (request.type === 'INSERT_DUAL_POPUP' && !sender.tab) {
+      return insertDual(request);
+    }
+    if (request.type === 'TRIGGER_QUICK_FILL' && !sender.tab) {
+      const targetTab = request.tab ?? (Number.isInteger(request.tabId) ? await chrome.tabs.get(request.tabId).catch(() => null) : null);
+      return triggerQuickFill(targetTab, request.frameId ? { frameId: request.frameId } : null);
+    }
+    if (request.type === 'LOCAL_MAIL_ACTION') {
       if (sender.url !== `chrome-extension://${chrome.runtime.id}/src/popup.html`) return { status: 'untrusted', message: 'Invalid page.' };
-      if (!['list', 'connect', 'remove'].includes(request.payload?.command)) return { status: 'untrusted', message: 'Invalid request.' };
-      try { return { status: 'ok', ...await mailHost(request.payload) }; }
-      catch (error) { return { status: 'error', message: describeMailError(error) }; }
+      const command = request.payload?.command;
+      if (command === 'list') return { status: 'ok', accounts: await listLocalMailAccounts() };
+      if (command === 'connect') {
+        try { return { status: 'ok', ...await connectLocalProvider(request.payload) }; }
+        catch (error) { return { status: 'error', message: describeLocalMailError(error) }; }
+      }
+      if (command === 'remove') return await removeLocalAccount(request.payload.id);
+      if (command === 'focus') return { status: await focusWebmailTab(request.payload.tabId) ? 'ok' : 'error' };
+      return { status: 'untrusted', message: 'Invalid request.' };
+    }
+    if (request.type === 'FOCUS_WEBMAIL') {
+      const fromPopup = sender.url === `chrome-extension://${chrome.runtime.id}/src/popup.html`;
+      const fromTab = Boolean(sender.tab?.id && originOf(sender.url) === request.origin);
+      if (!fromPopup && !fromTab) return { status: 'untrusted', message: 'Invalid page.' };
+      const accounts = await listLocalMailAccounts();
+      const target = accounts.find(a => a.kind === 'webmail-tab' && a.tabId === request.webmailTabId);
+      if (!target) return { status: 'error', message: 'Webmail tab is closed.' };
+      return { status: await focusWebmailTab(target.tabId) ? 'ok' : 'error' };
     }
     if (request.type === 'SEARCH_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
@@ -216,6 +670,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     }
     if (request.type === 'SEARCH_POPUP' && !sender.tab) return search(request);
     if (request.type === 'INSERT_POPUP' && !sender.tab) return insert(request);
+    if (request.type === 'OPEN_LINK_POPUP' && !sender.tab) return openLink(request);
     if (request.type === 'TRUST_CANDIDATE' && !sender.tab) return trustCandidate(request);
     if (request.type === 'SELECT_CANDIDATE' && !sender.tab) return selectCandidate(request);
     if (request.type === 'SELECT_INLINE_CANDIDATE') {
@@ -226,9 +681,18 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
       return insert({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: request.origin, sessionId: request.sessionId });
     }
+    if (request.type === 'OPEN_LINK_INLINE') {
+      if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
+      return openLink({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: request.origin, sessionId: request.sessionId });
+    }
     if (request.type === 'COPY_CLIPBOARD') {
       const ok = await copyViaOffscreen(request.text);
+      if (ok && request.text) await scheduleClipboardClear();
       return { status: ok ? 'copied' : 'error' };
+    }
+    if (request.type === 'CLIPBOARD_COPIED') {
+      await scheduleClipboardClear();
+      return { status: 'scheduled' };
     }
     return { status: 'error', message: 'Unknown request.' };
   })().then(respond, () => respond({ status: 'error', message: 'Request failed.' }));
@@ -257,7 +721,50 @@ async function copyViaOffscreen(text) {
   }
 }
 
-chrome.tabs.onRemoved.addListener(tabId => sessions.deleteTab(tabId));
+function setupContextMenus() {
+  if (!chrome.contextMenus?.create) return;
+  const createItem = () => {
+    try {
+      chrome.contextMenus.create({
+        id: 'codesnap-fill-code',
+        title: chrome.i18n?.getMessage('contextMenuFill') || 'CodeSnap: Find & insert verification code',
+        contexts: ['editable', 'page'],
+        documentUrlPatterns: ['https://*/*']
+      });
+    } catch { /* Ignore duplicate or unsupported context menu creation. */ }
+  };
+  if (typeof chrome.contextMenus.removeAll === 'function') {
+    try { chrome.contextMenus.removeAll(createItem); } catch { createItem(); }
+  } else {
+    createItem();
+  }
+}
+
+chrome.runtime?.onInstalled?.addListener?.(setupContextMenus);
+chrome.runtime?.onStartup?.addListener?.(setupContextMenus);
+chrome.contextMenus?.onClicked?.addListener?.((info, tab) => {
+  if (info?.menuItemId === 'codesnap-fill-code' && tab) {
+    void triggerQuickFill(tab, info);
+  }
+});
+chrome.commands?.onCommand?.addListener?.(async command => {
+  if (command !== 'fill-verification-code') return;
+  const tabs = await chrome.tabs?.query?.({ active: true, lastFocusedWindow: true }).catch(() => []);
+  const tab = tabs?.[0] ?? (await chrome.tabs?.query?.({ active: true, currentWindow: true }).catch(() => []))?.[0];
+  if (tab) await triggerQuickFill(tab);
+});
+chrome.alarms?.onAlarm?.addListener?.(async alarm => {
+  if (alarm?.name !== 'codesnap-clear-clipboard') return;
+  const { autoClearClipboard } = await chrome.storage.local.get('autoClearClipboard');
+  if (autoClearClipboard === false) return;
+  await copyViaOffscreen('');
+  await chrome.storage.session?.set?.({ clipboardClearActive: false });
+});
+
+chrome.tabs.onRemoved.addListener(tabId => {
+  sessions.deleteTab(tabId);
+  unregisterWebmailTab(tabId);
+});
 chrome.tabs.onUpdated.addListener((tabId, changes) => {
   if (changes.url) sessions.deleteTab(tabId);
 });

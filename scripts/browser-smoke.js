@@ -112,14 +112,14 @@ try {
   if (await popup.locator('#search').isVisible()) throw new Error('Manual search button should not be required when a code exists');
   if (process.env.POPUP_SCREENSHOT) await popup.locator('body').screenshot({ path: process.env.POPUP_SCREENSHOT });
   await popup.locator('.code-button').click();
-  await popup.locator('#result').getByText('Code inserted. Finish on the website.').waitFor();
+  await popup.locator('#result').getByText(/Code inserted\. Finish on the website\.|Код вставлен\. Завершите действие на сайте\./).waitFor();
   await popup.evaluate(() => {
     chrome.tabs.sendMessage = async () => ({ detected: false, channel: null });
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { window.__copiedCode = value; } } });
   });
   await popup.locator('#search').click();
   await popup.locator('.code-button').click();
-  await popup.locator('#result').getByText('Code copied. Paste it into the website.').waitFor();
+  await popup.locator('#result').getByText(/Code copied\. Paste it into the website\.|Код скопирован\. Вставьте его в поле на сайте\./).waitFor();
   if (await popup.evaluate(() => window.__copiedCode) !== '483921') throw new Error('Clicking the code without a field did not copy it');
   await context.serviceWorkers()[0].evaluate(() => {
     globalThis.fetch = async url => {
@@ -140,5 +140,45 @@ try {
   await bitbase.locator('button[aria-label="Find verification code"]').click();
   await bitbase.waitForFunction(() => document.querySelector('#email')?.value === '360069', null, { timeout: 5000 });
   if (await bitbase.locator('#auth').inputValue()) throw new Error('Email code was inserted into the authenticator field');
-  console.log('Chrome smoke: Bitbase-style email found through recent-mail fallback and inserted only into its email field; hidden-tab-URL insertion and popup actions also worked.');
+
+  // Verify live SVG QR 2FA scanning inside real Chromium without native BarcodeDetector
+  const qrPage = await context.newPage();
+  const qrRows = (
+    '1111111000010011001101110110001111111|1000001010001110110100001100001000001|1011101011011000000111010000101011101|' +
+    '1011101011110001110101101000001011101|1011101001111000000101100100001011101|1000001001111001101010000000101000001|' +
+    '1111111010101010101010101010101111111|0000000010101001000010110011100000000|1000001010100110001111111110011001110|' +
+    '0011000110010100000010000001111111110|0101111000110010011010001111010000111|1011000101000101100000011000010011001|' +
+    '1111101001100010100110011101111100101|0000010111111110111110010001000000011|1001111110101011110010000101001011011|' +
+    '0000000001111110011100000000101001110|1110011000110100100101010111111001101|1001110101000110001010011010101100110|' +
+    '0100111010110111010010010111100010101|1001100100111100000110000010010100010|1010001100100011110100111010111110110|' +
+    '0000110100100111101101110001010010111|1001111011011001001010100101000000011|0011110010001110100101000010110011000|' +
+    '1101011110001011111101010001011110011|1111000001000010100000011010110100000|1011111001010010011011001101011000111|' +
+    '1000010111110111000010011000101011111|1001101111011010110000101101111111011|0000000011000101110110110011100011001|' +
+    '1111111000000001000111111100101010101|1000001001111010111110100011100011000|1011101000100101100101000111111110100|' +
+    '1011101001100000101000010111011001101|1011101001111111111100000100100101011|1000001000010000001110100001001001001|' +
+    '1111111010010101100010111000100010101'
+  ).split('|');
+  let svgRects = '';
+  qrRows.forEach((row, r) => {
+    for (let c = 0; c < row.length; c++) if (row[c] === '1') svgRects += `<rect x="${c}" y="${r}" width="1" height="1"/>`;
+  });
+  await qrPage.route('https://2fas.com/setup', route => route.fulfill({
+    contentType: 'text/html',
+    body: `<h1>2FAS Setup</h1><svg viewBox="0 0 37 37" width="185" height="185" fill="#000">${svgRects}</svg>`
+  }));
+  await qrPage.goto('https://2fas.com/setup', { waitUntil: 'domcontentloaded' });
+  const qrTab = await context.serviceWorkers()[0].evaluate(async () => {
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return { id: active.id, windowId: active.windowId };
+  });
+  const qrPopup = await context.newPage();
+  await qrPopup.addInitScript(t => { chrome.tabs.query = async () => [t]; }, { id: qrTab.id, url: 'https://2fas.com/setup', windowId: qrTab.windowId });
+  await qrPopup.goto(`chrome-extension://${extensionId}/src/popup.html`);
+  await qrPopup.locator('#totpToggleAdd').click();
+  await qrPopup.locator('#totpScanBtn').click();
+  await qrPopup.locator('.totp-digits-text').waitFor({ timeout: 5000 });
+  const totpAddedText = await qrPopup.locator('#totpStatus').textContent();
+  if (!/2FAS/.test(totpAddedText || '')) throw new Error(`SVG QR 2FA scan did not report 2FAS success: ${totpAddedText}`);
+
+  console.log('Chrome smoke: Bitbase-style email found through recent-mail fallback and inserted only into its email field; hidden-tab-URL insertion, SVG QR 2FA scanning and popup actions all worked.');
 } finally { await context.close(); }

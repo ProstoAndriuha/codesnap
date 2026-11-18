@@ -33,6 +33,12 @@ h2{margin:0;font-size:14px;font-weight:750}
 .review{display:block;margin-top:7px;padding:7px 8px;border-radius:8px;background:#fff6e7;color:#8b5418;font-size:10px}
 .choice{display:block;width:100%;margin:7px 0;padding:9px 10px;border:1px solid #d7def1;border-radius:9px;background:#f8faff;color:#2b3c72;text-align:left;font-size:12px}
 .choice:hover{border-color:#91a1e9;background:#eef2ff}
+.link-button{display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;margin:0;padding:10px 12px;border:1px solid #b5c6fa;border-radius:11px;background:#edf1ff;color:#243bb5;text-align:left;transition:background .15s,border-color .15s}
+.link-button:hover{border-color:#7387ec;background:#e4eaff}
+.link-button.secondary-link{margin-top:8px;padding:8px 10px;background:#f7f9ff}
+.link-title{font-size:13px;font-weight:750;overflow-wrap:anywhere}
+.link-host{font-size:10px;color:#5a6990}
+.link-actions{display:flex;align-items:center;justify-content:space-between;margin-top:5px}
 .quiet-icon{color:#8c9bd2;font-size:17px}
 select{width:100%;margin-top:11px;padding:9px 11px;border:1px solid #dce3ef;border-radius:10px;background:#fbfcff;color:#263752;font-size:12px;outline:none}
 select:focus-visible,button:focus-visible,.switch input:focus-visible+.slider{outline:2px solid #546be9;outline-offset:2px}
@@ -79,3 +85,27 @@ select:focus-visible,button:focus-visible,.switch input:focus-visible+.slider{ou
 .mail-flow{margin-top:12px;padding:12px;background:#edf1ff;border-radius:10px;font-size:12px}
 .mail-flow strong{display:block;font-size:22px;letter-spacing:2px;color:#4056c5}
 .mail-flow a{display:block;margin:8px 0;color:#4056c5}
+.site-actions-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+.hotkey-hint{margin-left:auto;padding:2px 7px;border:1px solid #e0e6f5;border-radius:6px;background:#f7f9ff;color:#6f7d99;font:650 10px ui-monospace,SFMono-Regular,Menlo,monospace}
+.expiry-pill{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#e4eaff;color:#384ec0;font:700 10px system-ui;font-variant-numeric:tabular-nums}
+.expiry-pill.expired{background:#ffecef;color:#b42336}
+.dual-fill-button{display:block;width:100%;margin-top:10px;padding:10px 12px;border:0;border-radius:10px;background:linear-gradient(135deg,#566bea,#6e53e6);color:#fff;font:750 12px system-ui;box-shadow:0 4px 12px #566bea38}
+.dual-fill-button:hover{filter:brightness(1.06)}
+.totp-head-actions{display:flex;align-items:center;gap:6px}
+.totp-result{margin-top:9px}
+.totp-code-button{display:flex;flex-direction:column;gap:6px;width:100%;padding:10px 12px;border:1px solid #c5d1fa;border-radius:11px;background:#f4f7ff;color:#243bb5;text-align:left}
+.totp-code-button:hover{border-color:#7387ec;background:#eaefff}
+.totp-row-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.totp-digits-text{font-size:21px;font-weight:800;letter-spacing:2px;font-variant-numeric:tabular-nums}
+.totp-sec{padding:2px 7px;border-radius:999px;background:#dde5ff;color:#3347b4;font:750 11px system-ui;font-variant-numeric:tabular-nums}
+.totp-progress{width:100%;height:4px;border-radius:4px;background:#dbe3fc;overflow:hidden}
+.totp-progress-bar{height:100%;border-radius:4px;background:#566bea;transition:width .35s linear}
+.totp-sub{display:flex;justify-content:space-between;align-items:center;gap:8px;color:#586780;font-size:11px}
+.full-btn{width:100%}
+.totp-saved-list{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.totp-saved-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #e5eaf4;border-radius:8px;background:#f8faff;font-size:11px}
+.totp-saved-info{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#263752;font-weight:600}
+.totp-status{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#edf2ff;color:#2c409c;font-size:11px;font-weight:600;line-height:1.4}
+.totp-status.ok{background:#e7f7ef;color:#146848}
+.totp-status.err{background:#ffecef;color:#a61d31}
+.totp-status[hidden]{display:none}

@@ -9,15 +9,27 @@ function decodeBase64Url(input) {
   return new TextDecoder().decode(Uint8Array.from(binary, char => char.charCodeAt(0)));
 }
 
-function bodyText(payload) {
-  if (!payload) return '';
-  if (payload.mimeType === 'text/plain' && payload.body?.data) return decodeBase64Url(payload.body.data);
-  const plain = (payload.parts ?? []).map(bodyText).filter(Boolean).join('\n');
-  if (plain) return plain;
-  if (payload.mimeType === 'text/html' && payload.body?.data) {
-    return decodeBase64Url(payload.body.data).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]*>/g, ' ');
+function collectParts(payload, plainParts, htmlParts) {
+  if (!payload) return;
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    plainParts.push(decodeBase64Url(payload.body.data));
+  } else if (payload.mimeType === 'text/html' && payload.body?.data) {
+    htmlParts.push(decodeBase64Url(payload.body.data));
   }
-  return '';
+  for (const part of payload.parts ?? []) collectParts(part, plainParts, htmlParts);
+}
+
+function bodyParts(payload) {
+  const plainParts = [];
+  const htmlParts = [];
+  collectParts(payload, plainParts, htmlParts);
+  const rawHtml = htmlParts.filter(Boolean).join('\n');
+  const html = rawHtml
+    ? rawHtml.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').slice(0, 122_880)
+    : '';
+  const plain = plainParts.filter(Boolean).join('\n');
+  const text = plain || (html ? html.replace(/<[^>]*>/g, ' ') : '');
+  return { text, html };
 }
 
 export async function apiFetch(url, token, retries = 3) {
@@ -60,7 +72,7 @@ export async function apiFetch(url, token, retries = 3) {
 
 export async function findMessages(token, sender = null, seenIds = [], maxAgeSeconds = CODE_MAX_AGE_SECONDS, broad = false) {
   const cutoff = Math.floor((Date.now() - (maxAgeSeconds + 60) * 1000) / 1000);
-  const query = sender ? `from:${sender} after:${cutoff}` : broad ? `after:${cutoff}` : `after:${cutoff} {verification code otp security confirmation login sign-in authentication код verificare withdrawal вывод подтверждение пароль auth pin token}`;
+  const query = sender ? `from:${sender} after:${cutoff}` : broad ? `after:${cutoff}` : `after:${cutoff} {verification code otp security confirmation login sign-in authentication verify confirm activate activation magic link код verificare withdrawal вывод подтверждение активация ссылка пароль auth pin token}`;
   const list = await apiFetch(`${API}?${new URLSearchParams({ q: query, maxResults: sender ? '8' : broad ? '40' : '20', includeSpamTrash: 'true' })}`, token);
   const seen = new Set(seenIds);
   return loadMessages(token, (list.messages ?? []).map(({ id }) => id), seen);
@@ -70,8 +82,24 @@ async function loadMessages(token, ids, seen) {
   const loaded = await Promise.all([...new Set(ids)].filter(id => !seen.has(id)).map(async id => {
     const message = await apiFetch(`${API}/${encodeURIComponent(id)}?format=full`, token);
     if (message.labelIds?.includes('TRASH')) return null;
-    const headers = Object.fromEntries((message.payload?.headers ?? []).map(h => [h.name.toLowerCase(), h.value]));
-    return { id, from: headers.from ?? '', subject: headers.subject ?? '', timestamp: Number(message.internalDate), body: bodyText(message.payload) };
+    const rawHeaders = message.payload?.headers ?? [];
+    const headers = Object.fromEntries(rawHeaders.map(h => [h.name.toLowerCase(), h.value]));
+    const authResults = rawHeaders
+      .filter(h => /^(?:arc-)?authentication-results$/i.test(h.name))
+      .map(h => h.value)
+      .filter(Boolean)
+      .join(' ');
+    const parts = bodyParts(message.payload);
+    return {
+      id,
+      from: headers.from ?? '',
+      replyTo: headers['reply-to'] ?? '',
+      authResults,
+      subject: headers.subject ?? '',
+      timestamp: Number(message.internalDate),
+      body: parts.text,
+      html: parts.html
+    };
   }));
   return loaded.filter(Boolean);
 }

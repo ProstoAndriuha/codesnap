@@ -8,8 +8,8 @@
 </head>
 <body>
   <header class="hero">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">0.8.2</span></div>
-    <p data-i18n="tagline">Your email codes, exactly where you need them.</p>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.5 5.8 13h5l-1 8.5L18.5 10h-5l.5-7.5Z" fill="currentColor"/></svg></span><span>CodeSnap</span><span class="version" id="appVersion">1.0.1</span></div>
+    <p data-i18n="tagline">Your email codes &amp; activation links, 100% locally.</p>
   </header>
 
   <main>
@@ -18,35 +18,85 @@
       <h1 id="site" data-i18n="checkingPage">Checking the page…</h1>
       <p class="supporting" id="fieldType" data-i18n="lookingForField">Looking for a verification field</p>
       <div id="result" class="result" role="status" aria-live="polite" data-i18n="lookingForCode">Looking for your code…</div>
+      <div id="dualFillWrap" hidden><button class="dual-fill-button" id="dualFillBtn" type="button" data-i18n="dualFillAction">⚡ Insert both codes (Email + 2FA)</button></div>
       <button class="quiet-search" id="search" type="button" data-i18n="checkAgain" hidden>↻ Check again</button>
+      <div class="site-actions-row">
+        <button class="text-button" id="toggleMuteSite" type="button" hidden></button>
+        <span class="hotkey-hint" id="hotkeyHint" title="Быстрая вставка кода">Alt+Shift+V</span>
+      </div>
+    </section>
+
+    <section class="card totp-card" aria-labelledby="totpTitle">
+      <div class="section-top">
+        <h2 id="totpTitle" data-i18n="totpTitle">2FA Authenticator</h2>
+        <div class="totp-head-actions">
+          <button class="text-button" id="totpLockBtn" type="button" hidden>🔒 Lock</button>
+          <button class="text-button" id="totpToggleAdd" type="button" data-i18n="totpAddToggle">+ Add 2FA key</button>
+        </div>
+      </div>
+      <div id="totpResult" class="totp-result"></div>
+      <p class="totp-status" id="totpStatus" role="status" aria-live="polite" hidden></p>
+      <form id="totpUnlockForm" class="mail-form" hidden>
+        <label class="sr-only" for="totpPinInput">PIN / Master password</label>
+        <input id="totpPinInput" type="password" autocomplete="off" placeholder="PIN / Мастер-пароль">
+        <button class="secondary" id="totpUnlockSubmit" type="submit">Разблокировать 2FA</button>
+      </form>
+      <div id="totpManagePanel" class="mail-form" hidden>
+        <button class="secondary full-btn" id="totpScanBtn" type="button" data-i18n="totpScanPage">📷 Scan QR / key on page</button>
+        <form id="totpAddForm">
+          <label for="totpSecretInput" data-i18n="totpInputLabel">Base32 secret or otpauth:// URI</label>
+          <input id="totpSecretInput" type="password" autocomplete="off" placeholder="JBSWY3DPEHPK3PXP или otpauth://...">
+          <label for="totpIssuerInput" data-i18n="totpIssuerLabel">Service / website name</label>
+          <input id="totpIssuerInput" autocomplete="off" placeholder="GitHub, Binance, Google…">
+          <button class="secondary" id="totpSaveBtn" type="submit" data-i18n="totpSave">Save 2FA locally</button>
+        </form>
+        <div id="totpSavedList" class="totp-saved-list"></div>
+        <details id="totpPinDetails">
+          <summary>PIN / Мастер-пароль (необязательно)</summary>
+          <input id="totpNewPin" type="password" autocomplete="off" placeholder="Новый PIN (пусто — снять защиту)">
+          <button class="secondary" id="totpSetPinBtn" type="button">Сохранить PIN</button>
+        </details>
+      </div>
     </section>
 
     <section class="card accounts-card" aria-labelledby="accountsTitle">
-      <div class="section-top"><h2 id="accountsTitle" data-i18n="gmailAccounts">Gmail accounts</h2><span class="quiet-icon" aria-hidden="true">✉</span></div>
-      <label class="sr-only" for="account" data-i18n="chooseAccount">Choose Gmail account</label>
+      <div class="section-top"><h2 id="accountsTitle" data-i18n="gmailAccounts">Mail accounts</h2><span class="quiet-icon" aria-hidden="true">✉</span></div>
+      <label class="sr-only" for="account" data-i18n="chooseAccount">Choose mail account</label>
       <select id="account"><option value="all" data-i18n="allAccounts">All connected accounts</option></select>
-      <label class="sr-only" for="provider">Почтовый сервис</label>
-      <select id="provider" hidden><option value="gmail">Google / Gmail</option><option value="yahoo">Yahoo</option><option value="yandex">Яндекс</option><option value="mailru">Mail.ru</option><option value="imap">Другая почта / ручной IMAP</option></select>
+      <label class="sr-only" for="provider" data-i18n="mailProviderLabel">Mail service</label>
+      <select id="provider">
+        <option value="gmail">Google / Gmail (OAuth)</option>
+        <option value="yandex">Яндекс Почта (вкладка)</option>
+        <option value="outlook">Outlook / Hotmail (вкладка / Graph)</option>
+        <option value="yahoo">Yahoo Mail (вкладка)</option>
+        <option value="mailru">Mail.ru (вкладка)</option>
+        <option value="proton">Proton Mail (вкладка)</option>
+        <option value="icloud">iCloud Mail (вкладка)</option>
+        <option value="zoho">Zoho Mail (вкладка)</option>
+        <option value="rambler">Рамблер/почта (вкладка)</option>
+        <option value="fastmail">Fastmail (вкладка / JMAP)</option>
+        <option value="aol">AOL Mail (вкладка)</option>
+        <option value="gmx">GMX / Mail.com (вкладка)</option>
+      </select>
       <div class="account-actions"><button class="secondary" id="connect" type="button" data-i18n="connectGmail">Connect mail</button><button class="text-button" id="removeAccount" type="button" data-i18n="removeSelected" hidden>Remove selected</button></div>
-      <p class="subtle" id="accounts" role="status" aria-live="polite" data-i18n="connectPrompt">Connect Gmail to find your codes.</p>
-      <form id="mailForm" class="mail-form" hidden>
-        <p id="yandexOAuthHint" class="subtle" data-i18n="yandexOAuthHint" hidden>Вход откроется на официальном сайте Яндекса. Наш сервер читает письма через IMAP: Chrome не поддерживает это соединение напрямую. Устанавливать программы не нужно.</p>
-        <label class="setting-check"><input id="mailConsent" type="checkbox" required><span data-i18n="mailCloudConsent">Разрешаю серверу CodeSnap хранить данные подключения зашифрованными и читать недавние письма для поиска кодов. Удаление аккаунта удаляет его данные подключения с сервера.</span></label>
-        <button id="connectYandex" class="secondary" type="button" data-i18n="connectYandexOAuth" hidden>Войти через Яндекс</button>
-        <details id="mailCredentials"><summary id="mailCredentialsTitle" data-i18n="mailPasswordAlternative">Запасной вариант: пароль приложения</summary>
-        <label for="mailEmail">Адрес почты</label><input id="mailEmail" type="email" autocomplete="off" required placeholder="name@example.com">
-        <label for="mailPassword">Пароль приложения</label><input id="mailPassword" type="password" autocomplete="off" required>
-        <p class="subtle">Создайте отдельный пароль приложения в настройках вашей почты.</p><a id="mailHelp" class="text-button" target="_blank" rel="noopener noreferrer">Как получить пароль приложения</a>
-        <details id="imapAdvanced"><summary>Настройки сервера</summary>
-          <label for="imapHost">IMAP-сервер</label><input id="imapHost" autocomplete="off" placeholder="imap.example.com">
-          <label for="imapPort">Порт</label><input id="imapPort" type="number" min="1" max="65535" value="993">
-          <label for="imapSecurity">Защищённое соединение</label><select id="imapSecurity"><option value="tls">SSL/TLS</option><option value="starttls">STARTTLS</option></select>
-          <label for="imapLogin">Логин, если отличается от адреса</label><input id="imapLogin" autocomplete="off">
-        </details>
-        <button id="saveMail" class="secondary" type="submit" data-i18n="mailCloudConnect">Подключить почту</button>
+      <p class="subtle" id="accounts" role="status" aria-live="polite" data-i18n="connectPrompt">Connect Gmail or open any webmail tab to find codes &amp; links.</p>
+      <p class="subtle" id="learnedAccountHint" hidden></p>
+      <p class="subtle" id="localProviderHint" hidden></p>
+      <form id="localApiForm" class="mail-form" hidden>
+        <details id="localApiAdvanced">
+          <summary data-i18n="localApiOptional">Прямой локальный API (без открытой вкладки, необязательно)</summary>
+          <div id="fastmailFields" hidden>
+            <label for="fastmailToken" data-i18n="fastmailTokenLabel">Fastmail API token (JMAP, только чтение)</label>
+            <input id="fastmailToken" type="password" autocomplete="off" placeholder="fmu1-...">
+          </div>
+          <div id="outlookFields" hidden>
+            <label for="outlookClientId" data-i18n="outlookClientIdLabel">Microsoft App Client ID (OAuth PKCE)</label>
+            <input id="outlookClientId" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
+          </div>
+          <button id="saveLocalApi" class="secondary" type="submit" data-i18n="connectLocalApi">Подключить API локально</button>
         </details>
       </form>
-      <p class="subtle"><span id="directMailPrivacy" data-i18n="directMailPrivacy">Gmail connects directly to Google. CodeSnap never sends or deletes emails.</span><span id="cloudMailPrivacy" data-i18n="privacyDisclaimer" hidden>Gmail connects directly to Google. Optional CodeSnap Cloud processes recent IMAP mail and stores credentials encrypted on our server. No sending or deleting emails.</span> <a href="https://prostoandriuha.github.io/codesnap/privacy.html" target="_blank" rel="noopener noreferrer" data-i18n="privacyLink">Privacy</a></p>
+      <p class="subtle"><span id="directMailPrivacy" data-i18n="directMailPrivacy">100% local in your browser. No CodeSnap servers, no Python helpers, no sending or deleting emails.</span> <a href="https://prostoandriuha.github.io/codesnap/privacy.html" target="_blank" rel="noopener noreferrer" data-i18n="privacyLink">Privacy</a></p>
     </section>
 
     <section class="card auto-card">
@@ -56,19 +106,19 @@
 
     <section class="card settings-card">
       <details><summary data-i18n="settingsTitle">Settings</summary>
-        <label class="setting-check"><input id="mailCloudEnabled" type="checkbox"><span><strong data-i18n="mailCloudTitle">Почта через CodeSnap Cloud</strong><small data-i18n="mailCloudDescription">Яндекс, Mail.ru, Yahoo и IMAP без установки программ. Gmail подключается напрямую.</small></span></label>
-        <p id="cloudStorageDetails" class="subtle" data-i18n="mailCloudStorage" hidden>Пароли приложений шифруются на сервере CodeSnap. Письма обрабатываются для поиска кодов, не сохраняются на диск. При отключении Cloud чтение приостанавливается; удалить данные можно кнопкой «Удалить выбранный».</p>
-        <label class="setting-check"><input id="detailedPopup" type="checkbox"><span><strong data-i18n="detailedPopupTitle">Detailed popup</strong><small data-i18n="detailedPopupDescription">Show code, sender, account and time beside the field.</small></span></label>
+        <label class="setting-check"><input id="localWebmailEnabled" type="checkbox" checked><span><strong data-i18n="localWebmailTitle">Local webmail tabs</strong><small data-i18n="localWebmailDescription">Read recent codes and activation links locally from open Yandex, Outlook, Yahoo, Mail.ru, Proton, iCloud, Zoho, Rambler, Fastmail, AOL and GMX tabs without passwords.</small></span></label>
+        <label class="setting-check"><input id="detailedPopup" type="checkbox"><span><strong data-i18n="detailedPopupTitle">Detailed popup</strong><small data-i18n="detailedPopupDescription">Show code, link, sender, account and time beside the field.</small></span></label>
+        <label class="setting-check"><input id="autoClearClipboard" type="checkbox" checked><span><strong data-i18n="autoClearTitle">Auto-clear clipboard</strong><small data-i18n="autoClearDescription">Clear copied verification codes from clipboard after 45 seconds.</small></span></label>
       </details>
     </section>
 
     <section class="pro-card" aria-label="CodeSnap Pro preview">
-      <div class="pro-top"><span class="pro-logo">✦</span><span>CodeSnap <strong>Pro</strong></span><span class="preview-pill">PREVIEW</span></div>
+      <div class="pro-top"><span class="pro-logo">✦</span><span>CodeSnap <strong>Pro</strong></span><span class="preview-pill">LOCAL</span></div>
       <p data-i18n="proHeadline">Everything that makes verification effortless.</p>
-      <div class="pro-features"><span data-i18n="proFeatAccounts">✓ Multiple Gmail accounts</span><span data-i18n="proFeatBeside">✓ Codes beside fields</span><span data-i18n="proFeatSpeed">✓ Faster active search</span><span data-i18n="proFeatMatch">✓ Advanced matching</span><span data-i18n="proFeatAdFree">✓ Ad-free at launch</span></div>
-      <p class="pro-note" data-i18n="proNote">Pro features are unlocked in this test build. Payments are not available yet.</p>
+      <div class="pro-features"><span data-i18n="proFeatAccounts">✓ Multiple mail accounts</span><span data-i18n="proFeatBeside">✓ Codes &amp; links beside fields</span><span data-i18n="proFeatSpeed">✓ Faster active search</span><span data-i18n="proFeatMatch">✓ Smart site matching</span><span data-i18n="proFeatAdFree">✓ 100% local &amp; ad-free</span></div>
+      <p class="pro-note" data-i18n="proNote">All features run locally in your browser without external CodeSnap servers.</p>
     </section>
-    <p class="footer-note" id="trust" data-i18n="footerTrust">CodeSnap never submits the website form for you.</p>
+    <p class="footer-note" id="trust" data-i18n="footerTrust">CodeSnap never submits forms or opens links automatically.</p>
   </main>
   <script type="module" src="popup.js"></script>
 </body>

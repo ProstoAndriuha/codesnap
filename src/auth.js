@@ -1,5 +1,5 @@
 import { getGmailProfile } from './gmail.js';
-import { listMailAccounts } from './mail-bridge.js';
+import { listLocalMailAccounts } from './local-mail.js';
 
 // A separate Web application OAuth client is required for Google's account chooser.
 // Chrome's manifest OAuth client remains in use for the primary Chrome account.
@@ -30,7 +30,7 @@ async function extraAccounts() {
 
 export async function listAccounts() {
   const { primaryEmail = null } = await chrome.storage.local.get('primaryEmail');
-  return { primaryEmail, extras: (await extraAccounts()).map(({ email, expiresAt }) => ({ email, expiresAt })), mailAccounts: await listMailAccounts() };
+  return { primaryEmail, extras: (await extraAccounts()).map(({ email, expiresAt }) => ({ email, expiresAt })), mailAccounts: await listLocalMailAccounts() };
 }
 
 export async function connectPrimary() {
