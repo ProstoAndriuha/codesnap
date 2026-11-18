@@ -45,7 +45,23 @@ export const ECOSYSTEMS = Object.freeze([
   { siteDomains: ['bingx.com'], mailDomains: ['bingx.com', 'mail.bingx.com'], aliases: ['bingx'] },
   { siteDomains: ['htx.com', 'huobi.com'], mailDomains: ['htx.com', 'huobi.com', 'mail.htx.com'], aliases: ['htx', 'huobi'] },
   { siteDomains: ['kraken.com'], mailDomains: ['kraken.com', 'email.kraken.com'], aliases: ['kraken'] },
-  { siteDomains: ['coinbase.com'], mailDomains: ['coinbase.com', 'mail.coinbase.com'], aliases: ['coinbase'] }
+  { siteDomains: ['coinbase.com'], mailDomains: ['coinbase.com', 'mail.coinbase.com'], aliases: ['coinbase'] },
+  { siteDomains: ['blofin.com'], mailDomains: ['blofin.com', 'mail.blofin.com'], aliases: ['blofin'] },
+  { siteDomains: ['czrex.com'], mailDomains: ['czrex.com'], aliases: ['czrex', 'czr'] },
+  { siteDomains: ['bitunix.com'], mailDomains: ['bitunix.com', 'mail.bitunix.com'], aliases: ['bitunix'] },
+  { siteDomains: ['phemex.com'], mailDomains: ['phemex.com', 'mail.phemex.com'], aliases: ['phemex'] },
+  { siteDomains: ['lbank.com'], mailDomains: ['lbank.com', 'mail.lbank.com'], aliases: ['lbank'] },
+  { siteDomains: ['xt.com'], mailDomains: ['xt.com', 'mail.xt.com'], aliases: ['xt.com'] },
+  { siteDomains: ['pionex.com'], mailDomains: ['pionex.com', 'mail.pionex.com'], aliases: ['pionex'] },
+  { siteDomains: ['bitmart.com'], mailDomains: ['bitmart.com', 'mail.bitmart.com'], aliases: ['bitmart'] },
+  { siteDomains: ['coinex.com'], mailDomains: ['coinex.com', 'mail.coinex.com'], aliases: ['coinex'] },
+  { siteDomains: ['weex.com'], mailDomains: ['weex.com', 'mail.weex.com'], aliases: ['weex'] },
+  { siteDomains: ['toobit.com'], mailDomains: ['toobit.com', 'mail.toobit.com'], aliases: ['toobit'] },
+  { siteDomains: ['whitebit.com'], mailDomains: ['whitebit.com', 'mail.whitebit.com'], aliases: ['whitebit'] },
+  { siteDomains: ['ascendex.com'], mailDomains: ['ascendex.com', 'mail.ascendex.com'], aliases: ['ascendex'] },
+  { siteDomains: ['poloniex.com'], mailDomains: ['poloniex.com', 'mail.poloniex.com'], aliases: ['poloniex'] },
+  { siteDomains: ['deribit.com'], mailDomains: ['deribit.com', 'mail.deribit.com'], aliases: ['deribit'] },
+  { siteDomains: ['woo.org', 'woox.io'], mailDomains: ['woo.org', 'woox.io'], aliases: ['woox', 'woo x'] }
 ]);
 
 const SHARED_SUFFIX_REGEX = /(?:^|\.)(?:github\.io|pages\.dev|vercel\.app|netlify\.app|web\.app|appspot\.com|herokuapp\.com|onrender\.com|railway\.app|fly\.dev|supabase\.co|firebaseapp\.com|workers\.dev)$/;

@@ -2,7 +2,7 @@
 
 Chrome Manifest V3 extension: find recent email verification codes and confirmation/activation links across 12+ mail providers — plus built-in encrypted 2FA TOTP & 1-click Dual Fill — **100% locally in your browser**. Never submits website forms or opens links without your click.
 
-Version 1.1.0. Zero backend servers, zero Python, zero helper ZIPs, zero stored mail passwords.
+Version 1.1.1. Zero backend servers, zero Python, zero helper ZIPs, zero stored mail passwords.
 
 - **Gmail**: direct Google OAuth + Gmail API (multiple accounts), or open Gmail Web tab.
 - **Yandex, Outlook / Hotmail, Yahoo, Mail.ru, Proton Mail, iCloud, Zoho, Rambler, Fastmail, AOL, GMX**: read recent verification codes and activation links locally from open webmail tabs in Chrome with **0 ms instant push** when a new email arrives — without sharing passwords or using any external server.

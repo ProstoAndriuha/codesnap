@@ -65,6 +65,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   let activeTab = options.tab ?? null;
   let activeOrigin = options.origin ?? '';
   let siteContext = options.siteContext ?? {};
+  let has2faField = Boolean(options.has2faField);
   let items = [];
   let searchQuery = '';
   let drawerMode = options.initialDrawer ?? null; // 'import' | 'add' | 'pin' | null
@@ -398,11 +399,25 @@ export async function mountAuthenticatorView(container, options = {}) {
 
   async function handleCardClick(item) {
     if (editMode) return;
-    if (activeTab?.id && item.isCurrentSite && activeOrigin.startsWith('https://')) {
+    if (activeTab?.id && (item.isCurrentSite || has2faField) && activeOrigin.startsWith('https://')) {
       try {
         const res = await sendTotpAction({ command: 'insert_totp', tabId: activeTab.id, origin: activeOrigin, id: item.id });
         if (res?.status === 'inserted') {
           setStatus(`✓ Код ${item.issuer} вставлен в поле на сайте`, 'ok');
+          if (!item.isCurrentSite) {
+            const host = new URL(activeOrigin).hostname.replace(/^www\./, '');
+            const bindBtn = document.createElement('button');
+            bindBtn.type = 'button';
+            bindBtn.className = 'text-button';
+            bindBtn.style.marginLeft = '6px';
+            bindBtn.textContent = `Привязать к ${host}`;
+            bindBtn.addEventListener('click', async () => {
+              await sendTotpAction({ command: 'update', id: item.id, patch: { domain: host } });
+              await refreshList();
+              setStatus(`✓ Ключ «${item.issuer}» привязан к ${host}`, 'ok');
+            });
+            statusEl.append(' ', bindBtn);
+          }
           return;
         }
       } catch { /* Fallback to clipboard copy cleanly. */ }
@@ -658,6 +673,7 @@ export async function mountAuthenticatorView(container, options = {}) {
       activeTab = next.tab ?? activeTab;
       activeOrigin = next.origin ?? activeOrigin;
       siteContext = next.siteContext ?? siteContext;
+      if (next.has2faField !== undefined) has2faField = Boolean(next.has2faField);
       return refreshList();
     },
     destroy() {

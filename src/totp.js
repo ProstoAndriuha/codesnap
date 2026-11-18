@@ -3,6 +3,49 @@ import { ECOSYSTEMS, SITES, rootDomainOf, siteIdentity, matchesMaskedEmail } fro
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const PBKDF2_ITERATIONS = 150_000;
 
+const BRAND_NOISE = new Set([
+  'com', 'net', 'org', 'io', 'ru', 'me', 'co', 'totp', '2fa', 'mfa', 'otp', 'auth', 'ga',
+  'account', 'acc', 'website', 'site', 'web', 'login', 'main', 'mail', 'email', 'user', 'app', 'exchange'
+]);
+
+function stripEmailsFromText(text) {
+  return String(text ?? '').replace(/[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi, ' ');
+}
+
+export function extractBrandFromAccountLabel(rawAccount) {
+  const raw = String(rawAccount ?? '').trim();
+  if (!raw) return '';
+
+  const parts = raw.split(/(?:--|[:/|()\s,;])+/).map(s => s.trim()).filter(Boolean);
+  const nonEmailTokens = [];
+  for (const part of parts) {
+    const atIdx = part.indexOf('@');
+    if (atIdx < 0) {
+      if (!BRAND_NOISE.has(part.toLowerCase())) nonEmailTokens.push(part);
+      continue;
+    }
+    const beforeAt = part.slice(0, atIdx);
+    const afterAt = part.slice(atIdx + 1);
+    const domMatch = /^([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})[-_]+(.+)$/i.exec(afterAt);
+    if (domMatch?.[2]) {
+      for (const tok of domMatch[2].split(/[-_]+/)) {
+        if (tok.length >= 2 && !BRAND_NOISE.has(tok.toLowerCase())) nonEmailTokens.push(tok);
+      }
+    }
+    for (const prefixTok of beforeAt.split(/[-_.]+/)) {
+      if (prefixTok.length >= 3 && !BRAND_NOISE.has(prefixTok.toLowerCase()) && inferDomainFromIssuer(prefixTok, '')) {
+        const root = prefixTok.replace(/\d+$/, '');
+        return (root.length >= 4 ? root : prefixTok).slice(0, 60);
+      }
+    }
+  }
+
+  const best = nonEmailTokens.find(t => t.replace(/\d+$/g, '').length >= 3) ?? nonEmailTokens.find(t => t.length >= 3);
+  if (!best) return '';
+  const root = best.replace(/\d+$/, '');
+  return (root.length >= 4 ? root : best).slice(0, 60);
+}
+
 export function extractAccountEmail(rawAccount, rawIssuer = '') {
   const sources = [rawAccount, rawIssuer];
   for (const source of sources) {
@@ -204,20 +247,24 @@ export function extractTotpFromScannedText(rawText, fallback = {}) {
 }
 
 function inferDomainFromIssuer(issuer, fallbackDomain = '') {
-  const norm = String(issuer ?? '').trim().toLowerCase();
+  const raw = String(issuer ?? '').trim();
+  const norm = raw.toLowerCase();
+  const compact = norm.replace(/[\s_-]+/g, '');
+  const noDigits = compact.replace(/\d+$/, '');
   if (!norm || norm === 'account' || norm === 'website') {
     return fallbackDomain ? rootDomainOf(fallbackDomain) : '';
   }
   for (const [, site] of Object.entries(SITES)) {
-    if (norm === site.name.toLowerCase() || norm.includes(site.name.toLowerCase())) {
+    const sName = site.name.toLowerCase();
+    if (norm === sName || compact === sName || norm.includes(sName) || compact.includes(sName)) {
       try { return rootDomainOf(new URL(site.origins[0]).hostname); } catch { /* ignore */ }
     }
   }
   if (/\bgoogle\b/i.test(norm)) return 'google.com';
   for (const eco of ECOSYSTEMS) {
     const ecoHit =
-      eco.siteDomains.some(d => norm === d || norm === d.split('.')[0]) ||
-      eco.aliases.some(a => norm === a || (a.length >= 4 && norm.includes(a)));
+      eco.siteDomains.some(d => norm === d || compact === d || norm === d.split('.')[0] || compact === d.split('.')[0] || noDigits === d.split('.')[0]) ||
+      eco.aliases.some(a => norm === a || compact === a || noDigits === a || (a.length >= 4 && (norm.includes(a) || compact.includes(a))));
     if (ecoHit) return eco.siteDomains[0];
   }
   const domainMatch = /\b([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/i.exec(norm);
@@ -260,7 +307,10 @@ export function parseTotpInput(rawInput, fallback = {}) {
     const accountPrefixDomain = !parsed.searchParams.get('issuer') && !issuerFromLabel && accountFromLabel.includes('--')
       ? accountFromLabel.split('--')[0].trim()
       : '';
-    const issuer = (parsed.searchParams.get('issuer') || issuerFromLabel || accountPrefixDomain || fallback.issuer || fallback.domain || 'Account').trim().slice(0, 60);
+    const brandFromAccount = !parsed.searchParams.get('issuer') && !issuerFromLabel
+      ? (accountPrefixDomain || extractBrandFromAccountLabel(accountFromLabel))
+      : '';
+    const issuer = (parsed.searchParams.get('issuer') || issuerFromLabel || brandFromAccount || fallback.issuer || fallback.domain || 'Account').trim().slice(0, 60);
     const account = (accountFromLabel || fallback.account || '').trim().slice(0, 80);
 
     const rawAlgo = String(parsed.searchParams.get('algorithm') || fallback.algorithm || 'SHA1').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -272,7 +322,9 @@ export function parseTotpInput(rawInput, fallback = {}) {
     const rawPeriod = Number(parsed.searchParams.get('period') ?? fallback.period ?? 30);
     const period = Number.isFinite(rawPeriod) && rawPeriod >= 15 && rawPeriod <= 120 ? Math.round(rawPeriod) : 30;
 
-    const domain = fallback.explicitDomain ? rootDomainOf(fallback.explicitDomain) : inferDomainFromIssuer(issuer, fallback.domain || '');
+    const domain = fallback.explicitDomain
+      ? rootDomainOf(fallback.explicitDomain)
+      : (inferDomainFromIssuer(issuer, '') || inferDomainFromIssuer(extractBrandFromAccountLabel(account), fallback.domain || ''));
     return { secret, issuer, account, domain, algorithm, digits, period };
   }
 
@@ -359,33 +411,70 @@ async function decryptEntries(vault, aesKey) {
   return Array.isArray(parsed) ? parsed : [];
 }
 
+function tokenizeHintLabel(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return [];
+  const expanded = text
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[._-]+/g, ' ');
+  const lower = text.toLowerCase();
+  const compact = lower.replace(/[\s_-]+/g, '');
+  const words = `${lower} ${expanded.toLowerCase()}`
+    .split(/[^a-z0-9а-яё]+/i)
+    .filter(w => w.length >= 3 && !BRAND_NOISE.has(w));
+  const out = new Set([lower, ...words]);
+  if (compact.length >= 3 && compact.length <= 30 && !compact.includes('@')) out.add(compact);
+  for (const w of words) {
+    const noDigits = w.replace(/\d+$/, '');
+    if (noDigits.length >= 4) out.add(noDigits);
+  }
+  return [...out].filter(w => w.length >= 3 && w.length <= 40 && !w.includes('@'));
+}
+
 function buildHint(entry) {
-  const normIssuer = String(entry.issuer ?? '').toLowerCase();
-  const normDomain = String(entry.domain ?? '').toLowerCase();
+  const normIssuer = String(entry.issuer ?? '').trim().toLowerCase();
+  const normDomain = String(entry.domain ?? '').trim().toLowerCase();
   const accountEmail = extractAccountEmail(entry.account, entry.issuer);
+  const accountBrand = extractBrandFromAccountLabel(entry.account);
+  const accountRemainder = [stripEmailsFromText(entry.account), accountBrand].filter(Boolean).join(' ');
+  const issuerWords = tokenizeHintLabel(entry.issuer);
+  const accountWords = tokenizeHintLabel(accountRemainder);
+  const allLabelWords = [...new Set([...issuerWords, ...accountWords])];
+  const effectiveDomain = normDomain || inferDomainFromIssuer(entry.issuer, '') || inferDomainFromIssuer(accountRemainder, '');
+
   const matchingEcos = ECOSYSTEMS.filter(eco =>
-    eco.siteDomains.some(d => normDomain === d || normDomain.endsWith(`.${d}`) || (d.split('.')[0].length >= 4 && normIssuer.includes(d.split('.')[0]))) ||
-    eco.aliases.some(a => normIssuer === a || (a.length >= 3 && normIssuer.includes(a)))
+    eco.siteDomains.some(d =>
+      effectiveDomain === d ||
+      effectiveDomain.endsWith(`.${d}`) ||
+      (d.split('.')[0].length >= 4 && allLabelWords.some(w => w === d.split('.')[0] || w.includes(d.split('.')[0])))
+    ) ||
+    eco.aliases.some(a =>
+      normIssuer === a ||
+      allLabelWords.includes(a) ||
+      (a.length >= 4 && (normIssuer.includes(a) || allLabelWords.some(w => w.includes(a))))
+    )
   );
-  const matchDomains = [...new Set([normDomain, ...matchingEcos.flatMap(e => e.siteDomains)].filter(Boolean))];
-  if (normIssuer.includes('google') && !matchDomains.includes('google.com')) matchDomains.push('google.com');
-  const issuerWords = normIssuer.split(/[^a-z0-9а-яё]+/i).filter(w => w.length >= 3 && !/^(?:app|auth|account|totp|2fa|website|com|org|net)$/.test(w));
+  const matchDomains = [...new Set([effectiveDomain, ...matchingEcos.flatMap(e => e.siteDomains)].filter(Boolean))];
+  if ((normIssuer.includes('google') || accountWords.includes('google')) && !matchDomains.includes('google.com')) {
+    matchDomains.push('google.com');
+  }
   const matchNames = [...new Set([
-    normIssuer,
-    ...issuerWords,
+    ...allLabelWords,
     ...matchingEcos.flatMap(e => e.aliases),
-    ...(normDomain ? [rootDomainOf(normDomain).split('.')[0]] : [])
+    ...(effectiveDomain ? [rootDomainOf(effectiveDomain).split('.')[0]] : [])
   ].filter(w => w.length >= 3 && w.length <= 40))];
+  const unattributed = matchDomains.length === 0 && (!normIssuer || /^(?:account|website|totp|2fa)$/i.test(normIssuer) || normIssuer === accountEmail);
   return {
     id: entry.id,
     issuer: entry.issuer,
     account: entry.account ?? '',
     accountEmail,
-    domain: entry.domain ?? '',
+    domain: effectiveDomain,
     digits: entry.digits ?? 6,
     period: entry.period ?? 30,
     matchDomains,
-    matchNames
+    matchNames,
+    unattributed
   };
 }
 
@@ -558,10 +647,53 @@ export async function updateTotpAccount(id, patch = {}) {
   return { ok: true, account: hints.find(h => h.id === id) };
 }
 
+export async function refreshTotpSiteHints() {
+  const { totpVault = null, totpSiteHints = [] } = await chrome.storage.local.get(['totpVault', 'totpSiteHints']);
+  if (!totpVault) return { ok: true, updated: false, count: 0 };
+  let vault, entries;
+  try {
+    const state = await readVaultAndKey();
+    vault = state.vault;
+    entries = state.entries;
+  } catch {
+    return { ok: false, locked: true, updated: false, count: Array.isArray(totpSiteHints) ? totpSiteHints.length : 0 };
+  }
+  let entriesChanged = false;
+  const nextEntries = entries.map(entry => {
+    let nextIssuer = entry.issuer;
+    if (!nextIssuer || /^(?:account|website)$/i.test(nextIssuer.trim())) {
+      const recovered = extractBrandFromAccountLabel(entry.account);
+      if (recovered) nextIssuer = recovered;
+    }
+    const nextDomain = entry.domain || inferDomainFromIssuer(nextIssuer, '') || inferDomainFromIssuer(stripEmailsFromText(entry.account), '');
+    if (nextIssuer !== entry.issuer || nextDomain !== entry.domain) {
+      entriesChanged = true;
+      return { ...entry, issuer: nextIssuer, domain: nextDomain };
+    }
+    return entry;
+  });
+  if (entriesChanged) {
+    const hints = await saveVaultEntries(nextEntries, vault);
+    return { ok: true, updated: true, count: hints.length };
+  }
+  const nextHints = nextEntries.map(buildHint);
+  if (JSON.stringify(nextHints) !== JSON.stringify(totpSiteHints)) {
+    await chrome.storage.local.set({ totpSiteHints: nextHints, totpEnabled: nextHints.length > 0 });
+    return { ok: true, updated: true, count: nextHints.length };
+  }
+  return { ok: true, updated: false, count: nextHints.length };
+}
+
 export function matchAllTotpHintsForSite(hints, origin, siteContext = {}) {
   if (!Array.isArray(hints) || !hints.length || !origin?.startsWith('https://')) return [];
   const identity = siteIdentity(origin, siteContext);
   if (!identity.hostname) return [];
+  const hostCore = rootDomainOf(identity.hostname).split('.')[0];
+  const signalEmails = new Set(
+    [siteContext.lastTypedEmail, siteContext.matchedEmailAccount, ...(Array.isArray(siteContext.pageEmails) ? siteContext.pageEmails : [])]
+      .map(e => extractAccountEmail(e))
+      .filter(Boolean)
+  );
 
   const matches = [];
   for (const hint of hints) {
@@ -576,8 +708,11 @@ export function matchAllTotpHintsForSite(hints, origin, siteContext = {}) {
     const hintIssuer = String(hint.issuer ?? '').toLowerCase();
     const names = Array.isArray(hint.matchNames) ? hint.matchNames : [];
     if ((hintIssuer && (hintIssuer === identity.hostName || identity.names.includes(hintIssuer))) ||
-        names.some(n => n.length >= 3 && (n === identity.hostName || identity.names.includes(n)))) {
+        names.some(n => n.length >= 3 && (n === identity.hostName || identity.names.includes(n) || (hostCore.length >= 5 && (n.startsWith(hostCore) || (n.length >= 5 && hostCore.startsWith(n))))))) {
       siteScore += 6;
+    }
+    if (siteScore === 0 && hint.unattributed && hint.accountEmail && signalEmails.has(String(hint.accountEmail).toLowerCase())) {
+      siteScore = 6;
     }
     if (siteScore >= 6) matches.push({ hint, siteScore });
   }

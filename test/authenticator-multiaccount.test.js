@@ -4,8 +4,10 @@ import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import {
   extractAccountEmail,
+  parseTotpInput,
   addTotpAccount,
   updateTotpAccount,
+  refreshTotpSiteHints,
   generateTotpCode,
   getTotpCandidatesForSite,
   listAllTotpCodes,
@@ -439,6 +441,222 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
       assert.match(autoChip.title, /tomaandreiw@gmail\.com/);
     } finally {
       verifyDom.window.close();
+    }
+  } finally {
+    Object.assign(globalThis, prior);
+  }
+});
+
+test('BloFin label variants, unattributed email fallback and stale hint refresh match blofin.com', async () => {
+  const mockStorage = makeChromeStorageMock();
+  const restore = setupBasicChromeEnv(mockStorage);
+  try {
+    const p1 = parseTotpInput(`otpauth://totp/BloFin-trader1@gmail.com?secret=${SAMPLE_SECRETS.okx1}`);
+    assert.equal(p1.issuer, 'BloFin');
+    assert.equal(p1.domain, 'blofin.com');
+
+    const p2 = parseTotpInput(`otpauth://totp/trader2@gmail.com-BloFin?secret=${SAMPLE_SECRETS.okx2}`);
+    assert.equal(p2.issuer, 'BloFin');
+    assert.equal(p2.domain, 'blofin.com');
+
+    const p3 = parseTotpInput(SAMPLE_SECRETS.kcex, { issuer: 'BloFin1', account: 'trader3@gmail.com' });
+    assert.equal(p3.domain, 'blofin.com');
+
+    // Simulate stale 1.1.0 hints lacking domain/matchDomains/unattributed upgrade
+    await addTotpAccount(`otpauth://totp/BloFin1:trader1@gmail.com?secret=${SAMPLE_SECRETS.okx1}&issuer=BloFin1`);
+    mockStorage.localData.totpSiteHints = [
+      { id: mockStorage.localData.totpSiteHints[0].id, issuer: 'BloFin1', account: 'trader1@gmail.com', domain: '', matchDomains: [], matchNames: ['blofin1'] }
+    ];
+    const refreshed = await refreshTotpSiteHints();
+    assert.equal(refreshed.ok, true);
+    assert.equal(refreshed.updated, true);
+
+    const blofinRes = await getTotpCandidatesForSite('https://blofin.com');
+    assert.equal(blofinRes.status, 'found');
+    assert.equal(blofinRes.issuer, 'BloFin1');
+    assert.equal(blofinRes.domain, 'blofin.com');
+
+    // Email-only entry (no site label) matches only via lastTypedEmail/pageEmails on blofin.com
+    mockStorage.localData.totpVault = null;
+    mockStorage.localData.totpSiteHints = [];
+    await addTotpAccount(`otpauth://totp/mywallet@gmail.com?secret=${SAMPLE_SECRETS.czrex}`);
+    const withoutEmail = await getTotpCandidatesForSite('https://blofin.com');
+    assert.equal(withoutEmail.status, 'none');
+    const withEmail = await getTotpCandidatesForSite('https://blofin.com', { lastTypedEmail: 'mywallet@gmail.com' });
+    assert.equal(withEmail.status, 'found');
+    assert.equal(withEmail.accountEmail, 'mywallet@gmail.com');
+  } finally {
+    restore();
+  }
+});
+
+test('BloFin SPA 6-box, maxlength="6" and aria-hidden overlay 2FA forms detect authenticator & insert on click', async () => {
+  const fieldsSource = readFileSync(new URL('../src/fields.js', import.meta.url), 'utf8');
+  const contentSource = readFileSync(new URL('../src/content.js', import.meta.url), 'utf8')
+    .replaceAll('if (!event.isTrusted) return;', '')
+    .replaceAll('if (event.isTrusted) ', '');
+
+  const mockStorage = makeChromeStorageMock({
+    autoWatch: true,
+    totpEnabled: true,
+    detailedPopup: false,
+    senders: {},
+    learnedSenders: {},
+    accountSelections: {},
+    learnedAccounts: {}
+  });
+  const prior = {
+    chrome: globalThis.chrome,
+    fetch: globalThis.fetch,
+    setInterval: globalThis.setInterval
+  };
+  let bgListener;
+  let activeContentListener;
+
+  globalThis.setInterval = () => 1;
+  globalThis.chrome = {
+    storage: {
+      ...mockStorage.storage,
+      onChanged: { addListener() {} }
+    },
+    identity: { getAuthToken: async () => ({ token: 'tok' }), removeCachedAuthToken: async () => {} },
+    tabs: {
+      get: async () => ({ id: 12, url: 'https://blofin.com/en/login?redirect=%2Fen%2F' }),
+      create: async () => ({}),
+      sendMessage: async (_tabId, msg) => (activeContentListener ? new Promise(resolve => activeContentListener(msg, {}, resolve)) : null),
+      onRemoved: { addListener() {} },
+      onUpdated: { addListener() {} }
+    },
+    contextMenus: { removeAll: async () => {}, create: () => {} },
+    alarms: { create: () => {} },
+    offscreen: { createDocument: async () => {} },
+    runtime: {
+      id: 'ongiekgidmkffdhgmjmlnjjgoggojoak',
+      getURL: path => `chrome-extension://ongiekgidmkffdhgmjmlnjjgoggojoak/${path.replace(/^\/+/, '')}`,
+      getContexts: async () => [],
+      onMessage: { addListener(fn) { bgListener = fn; } },
+      onInstalled: { addListener() {} },
+      onStartup: { addListener() {} }
+    }
+  };
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ messages: [] }) });
+
+  try {
+    await addTotpAccount(`otpauth://totp/BloFin:user@blofin.example?secret=${SAMPLE_SECRETS.okx1}&issuer=BloFin`);
+    await import(`../src/background.js?blofin=${Math.random()}`);
+
+    const layouts = [
+      {
+        name: 'deep-form-nested-6cell-with-hidden-step1',
+        html: `
+          <div class="auth-card">
+            <div class="step1" style="display:none">
+              <input name="email" type="text" value="user@blofin.example">
+              <input name="password" type="password" value="secret">
+            </div>
+            <div class="card-header"><span>←</span><h1>Google Authenticator</h1></div>
+            <p>Enter the Google Authenticator code</p>
+            <form>
+              <div><div><div><div><div><div><div>
+                ${'<input maxlength="1" autocomplete="off">'.repeat(6)}
+              </div></div></div></div></div></div></div>
+              <button type="submit">Confirm</button>
+              <a href="#trouble">Unable to verify?</a>
+            </form>
+          </div>
+        `,
+        readValue: doc => [...doc.querySelectorAll('form input')].map(i => i.value).join('')
+      },
+      {
+        name: 'six-inputs-maxlength-6',
+        html: `
+          <div class="auth-card">
+            <h2>Google Authenticator</h2>
+            <p>Enter the Google Authenticator code</p>
+            <form class="otp-form">
+              <div class="otp-row">
+                ${'<input type="tel" maxlength="6" inputmode="numeric">'.repeat(6)}
+              </div>
+              <button type="button">Confirm</button>
+            </form>
+          </div>
+        `,
+        readValue: doc => [...doc.querySelectorAll('.otp-row input')].map(i => i.value).join('')
+      },
+      {
+        name: 'aria-hidden-overlay-input-with-6-decorative-slots',
+        html: `
+          <div class="auth-card">
+            <h2>Google Authenticator</h2>
+            <p>Enter the Google Authenticator code</p>
+            <div class="otp-wrapper">
+              <input id="overlay-otp" aria-hidden="true" tabindex="0" inputmode="numeric" maxlength="6">
+              <div class="slots">
+                <div class="slot"></div><div class="slot"></div><div class="slot"></div>
+                <div class="slot"></div><div class="slot"></div><div class="slot"></div>
+              </div>
+            </div>
+          </div>
+        `,
+        wireDom: doc => {
+          const input = doc.querySelector('#overlay-otp');
+          const slots = [...doc.querySelectorAll('.slot')];
+          input.addEventListener('paste', e => {
+            e.preventDefault();
+            const text = (e.clipboardData?.getData('text/plain') || '').slice(0, 6);
+            slots.forEach((s, idx) => { s.textContent = text[idx] ?? ''; });
+          });
+        },
+        readValue: doc => [...doc.querySelectorAll('.slot')].map(s => s.textContent.trim()).join('')
+      }
+    ];
+
+    for (const layout of layouts) {
+      const dom = new JSDOM(`<!doctype html><body>${layout.html}</body>`, {
+        url: 'https://blofin.com/en/login?redirect=%2Fen%2F',
+        runScripts: 'outside-only'
+      });
+      try {
+        layout.wireDom?.(dom.window.document);
+        dom.window.crypto.randomUUID = (() => { let n = 0; return () => `bf-${layout.name}-${++n}`; })();
+        dom.window.setInterval = () => 1;
+        dom.window.chrome = {
+          storage: {
+            local: { get: async k => mockStorage.storage.local.get(k), set: async o => mockStorage.storage.local.set(o) },
+            onChanged: { addListener() {} }
+          },
+          runtime: {
+            onMessage: { addListener(fn) { activeContentListener = fn; } },
+            sendMessage: async req => new Promise(resolve => bgListener(req, { tab: { id: 12 }, frameId: 0, url: 'https://blofin.com/en/login?redirect=%2Fen%2F' }, resolve))
+          }
+        };
+
+        dom.window.eval(fieldsSource);
+        const detected = dom.window.VerificationFields.detect(dom.window.document, { allow2fa: true });
+        assert.ok(detected, `${layout.name}: expected VerificationFields.detect to find 2FA field`);
+        assert.equal(detected.channel, 'authenticator', `${layout.name}: expected channel=authenticator`);
+
+        dom.window.eval(contentSource);
+        let chip;
+        for (let i = 0; i < 30; i++) {
+          chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+          if (chip && /^\d{6}\s·\s\d+s$/.test(chip.textContent ?? '')) break;
+          await new Promise(r => setTimeout(r, 25));
+        }
+        assert.ok(chip && /^\d{6}\s·\s\d+s$/.test(chip.textContent ?? ''), `${layout.name}: expected live 2FA chip, got ${chip?.textContent}`);
+
+        const beforeGen = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx1 }, Date.now())).code;
+        chip.click();
+        for (let i = 0; i < 40; i++) {
+          if (chip.textContent === '✓' && layout.readValue(dom.window.document).length === 6) break;
+          await new Promise(r => setTimeout(r, 25));
+        }
+        const afterGen = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx1 }, Date.now())).code;
+        const val = layout.readValue(dom.window.document);
+        assert.ok(val === beforeGen || val === afterGen, `${layout.name}: expected code ${beforeGen}/${afterGen}, got ${val}`);
+      } finally {
+        dom.window.close();
+      }
     }
   } finally {
     Object.assign(globalThis, prior);

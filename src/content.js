@@ -74,11 +74,31 @@
   function siteHasTotpHint() {
     if (!Array.isArray(totpSiteHints) || !totpSiteHints.length) return false;
     const host = location.hostname.toLowerCase();
+    const hostNoWww = host.replace(/^www\./, '');
+    const parts = hostNoWww.split('.').filter(Boolean);
+    const hostCore = parts.length >= 2 ? parts.at(-2) : (parts[0] ?? '');
+    let signalEmails = null;
+    const getSignalEmails = () => {
+      if (signalEmails) return signalEmails;
+      const sig = readPageAccountSignals();
+      signalEmails = new Set([sig.lastTypedEmail, codeDetails?.accountEmail, ...(sig.pageEmails ?? [])].map(e => String(e ?? '').toLowerCase()).filter(Boolean));
+      return signalEmails;
+    };
     return totpSiteHints.some(hint => {
       const dom = String(hint.domain ?? '').toLowerCase();
       if (dom && (host === dom || host.endsWith(`.${dom}`))) return true;
       if (Array.isArray(hint.matchDomains) && hint.matchDomains.some(d => host === d || host.endsWith(`.${d}`))) return true;
-      if (Array.isArray(hint.matchNames) && hint.matchNames.some(n => n.length >= 3 && (host === n || host.startsWith(`${n}.`) || host.includes(`.${n}.`)))) return true;
+      if (Array.isArray(hint.matchNames) && hint.matchNames.some(n =>
+        n.length >= 3 && (
+          host === n ||
+          host.startsWith(`${n}.`) ||
+          host.includes(`.${n}.`) ||
+          (hostCore.length >= 5 && (n.startsWith(hostCore) || (n.length >= 5 && hostCore.startsWith(n))))
+        )
+      )) return true;
+      if (hint.unattributed && hint.accountEmail && getSignalEmails().has(String(hint.accountEmail).toLowerCase())) {
+        return true;
+      }
       return false;
     });
   }
@@ -167,7 +187,7 @@
     const host = document.createElement('div');
     host.id = 'codesnap-inline-panel';
     host.style.cssText = `position:fixed;z-index:2147483647;width:256px;max-width:calc(100vw - 16px);font:13px/1.4 system-ui,sans-serif;color:${dark ? '#e8ebff' : '#1d2942'}`;
-    const rect = field.anchor.getBoundingClientRect();
+    const rect = resolveVisibleAnchorRect(field.anchor);
     host.style.left = `${Math.max(8, Math.min(innerWidth - 264, rect.right - 256))}px`;
     host.style.top = `${rect.bottom + 150 < innerHeight ? rect.bottom + 7 : Math.max(8, rect.top - 150)}px`;
     const root = host.attachShadow({ mode: 'open' });
@@ -666,9 +686,20 @@
     positionPanel();
   }
 
+  function resolveVisibleAnchorRect(el) {
+    let rect = el.getBoundingClientRect();
+    if (rect.width >= 20 || rect.height >= 16) return rect;
+    let parent = el.parentElement;
+    for (let depth = 0; parent && depth < 4; depth++, parent = parent.parentElement) {
+      const cr = parent.getBoundingClientRect?.();
+      if (cr && cr.width >= 60 && cr.height >= 20 && cr.width <= 640 && cr.right > 0) return cr;
+    }
+    return rect;
+  }
+
   function positionPanel() {
     if (!panel || !field?.anchor?.isConnected) return;
-    const rect = field.anchor.getBoundingClientRect();
+    const rect = resolveVisibleAnchorRect(field.anchor);
     const width = panel.offsetWidth || (panel.dataset.kind === 'codes' ? 320 : 256);
     const height = panel.offsetHeight || 160;
     panel.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.right - width))}px`;
@@ -779,7 +810,7 @@
       } catch { /* sessionStorage unavailable */ }
     }
     const foundEmails = new Set();
-    for (const el of document.querySelectorAll?.('input[type="email"], input[name*="email" i], input[autocomplete="username"]') ?? []) {
+    for (const el of document.querySelectorAll?.('input[type="email"], input[name*="email" i], input[name*="account" i], input[id*="email" i], input[autocomplete="username"], input[placeholder*="email" i]') ?? []) {
       const m = /\b([a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})\b/i.exec(el.value ?? '');
       if (m) foundEmails.add(m[1].toLowerCase());
     }
@@ -824,7 +855,7 @@
 
   function position() {
     if (!chip || !field?.anchor?.isConnected) return;
-    const rect = field.anchor.getBoundingClientRect();
+    const rect = resolveVisibleAnchorRect(field.anchor);
     const dark = isDarkTheme();
     chip.style.background = dark ? 'rgba(21,28,48,.92)' : 'rgba(255,255,255,.88)';
     chip.style.color = dark ? '#e8ebff' : '#3449be';
@@ -1285,7 +1316,7 @@
       const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
       if (target === chip || target?.closest?.('#codesnap-inline-panel') || target?.getRootNode?.().host?.id === 'codesnap-inline-panel' || target?.id === 'codesnap-toast') return false;
       return record.type === 'attributes' || record.type === 'characterData' || [...record.addedNodes, ...record.removedNodes].some(node =>
-        node.nodeType === 1 && node.id !== 'codesnap-inline-panel' && node.id !== 'codesnap-toast' && (node.matches?.('input,label,fieldset,[role="group"],[role="dialog"],dialog,[class*="verify" i],[class*="confirm" i]') || node.querySelector?.('input,label,fieldset,[role="group"],[role="dialog"],dialog') || node.shadowRoot));
+        node.nodeType === 1 && node.id !== 'codesnap-inline-panel' && node.id !== 'codesnap-toast' && (node.matches?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="verify" i],[class*="confirm" i],[class*="auth" i],[class*="otp" i],[class*="code" i],[class*="modal" i]') || node.querySelector?.('input,[contenteditable],[tabindex],label,fieldset,[role="group"],[role="dialog"],dialog,[class*="auth" i],[class*="otp" i],[class*="code" i]') || node.shadowRoot));
     });
     if (!relevant) return;
     clearTimeout(debounceTimer);
@@ -1326,6 +1357,9 @@
       lastTypedEmail = em[1].toLowerCase();
       lastTypedEmailAt = Date.now();
       try { sessionStorage.setItem('__cs_login_email', JSON.stringify({ email: lastTypedEmail, ts: lastTypedEmailAt })); } catch { /* ignore */ }
+      if (totpSiteHints.some(h => h.unattributed && h.accountEmail === lastTypedEmail)) {
+        clearTimeout(debounceTimer); debounceTimer = setTimeout(paint, 80);
+      }
     } else if (/^(?:username|text|email)$/i.test(el.type || 'text') && /(?:user|login|account|nick)/i.test(`${el.name ?? ''} ${el.id ?? ''} ${el.autocomplete ?? ''}`) && rawVal.length >= 3 && rawVal.length <= 50) {
       lastTypedIdentifier = rawVal.toLowerCase();
     }

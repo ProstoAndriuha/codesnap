@@ -48,11 +48,88 @@ globalThis.VerificationFields = (() => {
     return el.isContentEditable || el.getAttribute?.('contenteditable') === 'true' || el.getAttribute?.('contenteditable') === '';
   }
 
+  function elementTextLen(el) {
+    if (!el) return 0;
+    return el.tagName === 'INPUT' ? (el.value ?? '').length : (el.textContent ?? '').trim().length;
+  }
+
+  function isGroupCellCandidate(candidate, groupLen = 6) {
+    if (!visible(candidate)) return false;
+    const attrs = attributeText(candidate);
+    if (EXCLUDED_ATTRS.test(attrs)) return false;
+    if (candidate.tagName === 'INPUT') {
+      if (candidate.type === 'email' || /(?:email|username|current-password|new-password)/i.test(candidate.autocomplete ?? '')) return false;
+      if ((candidate.value ?? '').length > 1) return false;
+      if (candidate.maxLength === 1 || candidate.maxLength < 0 || candidate.maxLength === 2) return true;
+      if (groupLen >= 4 && candidate.maxLength === groupLen) return true;
+      if (CELL_ARIA.test(candidate.getAttribute?.('aria-label') ?? '')) return true;
+      return false;
+    }
+    const ce = candidate.isContentEditable || candidate.getAttribute?.('contenteditable') === 'true' || candidate.getAttribute?.('contenteditable') === '';
+    return Boolean(ce && (candidate.textContent ?? '').trim().length <= 1);
+  }
+
+  function findDecorativeSlotsContainer(input) {
+    if (!input || input.tagName !== 'INPUT') return null;
+    const checkBoxGroup = (container, elList) => {
+      if (elList.length < 4 || elList.length > 8) return null;
+      if (!elList.every(el => /^(?:DIV|SPAN|LI|I|P)$/.test(el.tagName) &&
+        !el.querySelector?.('input,[contenteditable],button,a,select,textarea') &&
+        (el.textContent ?? '').trim().length <= 1)) return null;
+      const sameTag = elList.every(el => el.tagName === elList[0].tagName);
+      const otpCue = Boolean(
+        /one-time-code/i.test(input.autocomplete ?? '') ||
+        /^(?:numeric|decimal)$/i.test(input.inputMode ?? '') ||
+        input.type === 'tel' ||
+        (input.maxLength >= 4 && input.maxLength <= 8) ||
+        WORDS.test(attributeText(input)) ||
+        /(?:otp|code|pin|digit|cell|slot|box|verif|auth|totp)/i.test(`${container.className ?? ''} ${input.className ?? ''}`)
+      );
+      if (!sameTag && !otpCue) return null;
+      if (elList.every(el => elementShown(el))) return { container, slots: elList };
+      return null;
+    };
+
+    for (const parent of [input.parentElement, input.parentElement?.parentElement]) {
+      if (!parent || parent.nodeType !== 1) continue;
+      const directBoxes = [...parent.children].filter(el => el !== input && !el.contains(input) && !el.querySelector?.('input,[contenteditable]'));
+      const directHit = checkBoxGroup(parent, directBoxes);
+      if (directHit) return directHit;
+      for (const child of parent.children) {
+        if (child === input || child.contains(input) || child.querySelector?.('input,[contenteditable]')) continue;
+        const sibHit = checkBoxGroup(child, [...child.children]);
+        if (sibHit) return sibHit;
+      }
+    }
+    return null;
+  }
+
+  function resolveAnchor(input, slotsInfo = null) {
+    if (typeof input?.getBoundingClientRect !== 'function') return input;
+    const rect = input.getBoundingClientRect();
+    if (rect.width >= 24 && rect.height >= 16 && rect.right > 0) return input;
+    const info = slotsInfo ?? findDecorativeSlotsContainer(input);
+    if (info?.container && typeof info.container.getBoundingClientRect === 'function') {
+      const cr = info.container.getBoundingClientRect();
+      if (cr.width >= 60 && cr.height >= 20 && cr.width <= 640 && cr.right > 0) return info.container;
+    }
+    let parent = input.parentElement;
+    for (let depth = 0; parent && depth < 4; depth++, parent = parent.parentElement) {
+      const cr = parent.getBoundingClientRect?.();
+      if (cr && cr.width >= 60 && cr.height >= 20 && cr.width <= 640 && cr.right > 0) return parent;
+    }
+    return input;
+  }
+
   function otpCell(input) {
     if (!visible(input)) return false;
     if (input.maxLength === 1) return true;
     if (CELL_ARIA.test(input.getAttribute?.('aria-label') ?? '')) return true;
-    if ((input.isContentEditable || input.getAttribute?.('contenteditable') === 'true') && input.textContent.length <= 1 && /(?:otp|cell|digit|slot|box)/i.test(`${input.className || ''} ${input.getAttribute?.('data-cell') || ''}`)) return true;
+    if ((input.isContentEditable || input.getAttribute?.('contenteditable') === 'true' || input.getAttribute?.('contenteditable') === '') && elementTextLen(input) <= 1) {
+      if (/(?:otp|cell|digit|slot|box)/i.test(`${input.className || ''} ${input.getAttribute?.('data-cell') || ''}`)) return true;
+      const sibCount = [...(input.parentElement?.children ?? [])].filter(visible).length;
+      if (sibCount >= 4 && sibCount <= 8) return true;
+    }
     return false;
   }
 
@@ -71,15 +148,20 @@ globalThis.VerificationFields = (() => {
       if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') return false;
     }
     if (input.getAttribute?.('aria-hidden') !== 'true') return true;
-    // input-otp keeps the real, focusable input over its decorative slots.
+    // input-otp & custom exchange overlays keep the real, focusable input over decorative slots.
     const attrs = attributeText(input);
     const parent = input.parentElement;
     const otpContainer = Boolean(
       input.hasAttribute?.('data-input-otp') ||
-      input.closest?.('[data-input-otp],[data-otp-input],.ant-otp,.chakra-pin-input,.MuiOtpInput-Box') ||
-      /(?:otp|code|verification|slot)/i.test(`${parent?.className ?? ''} ${parent?.getAttribute?.('data-slot') ?? ''}`)
+      input.closest?.('[data-input-otp],[data-otp-input],.ant-otp,.chakra-pin-input,.MuiOtpInput-Box,[class*="otp" i],[class*="pin" i],[class*="code" i],[class*="verif" i]') ||
+      /(?:otp|code|verification|slot|pin|digit|box)/i.test(`${parent?.className ?? ''} ${parent?.getAttribute?.('data-slot') ?? ''}`)
     );
-    return input.tabIndex >= 0 && (/one-time-code/i.test(input.autocomplete ?? '') || (WORDS.test(attrs) && otpContainer));
+    return input.tabIndex >= 0 && (
+      /one-time-code/i.test(input.autocomplete ?? '') ||
+      (WORDS.test(attrs) && otpContainer) ||
+      Boolean(findDecorativeSlotsContainer(input)) ||
+      (otpContainer && ((input.maxLength >= 4 && input.maxLength <= 8) || /^(?:numeric|decimal)$/i.test(input.inputMode ?? '') || input.type === 'tel'))
+    );
   }
 
   function attributeText(input) {
@@ -122,7 +204,13 @@ globalThis.VerificationFields = (() => {
     return `${attributeText(input)} ${parts.filter(Boolean).join(' ')}`.trim();
   }
 
-  function contextParts(input) {
+  function hasVisibleEditable(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.matches?.('input,[contenteditable="true"],[contenteditable=""]') && visible(node)) return true;
+    return [...(node.querySelectorAll?.('input,[contenteditable="true"],[contenteditable=""]') ?? [])].some(visible);
+  }
+
+  function contextParts(input, allowedGroup = null) {
     const parts = [];
     if (input.labels) for (const l of input.labels) parts.push(cleanNodeText(l));
     const labelledBy = `${input.getAttribute?.('aria-labelledby') ?? ''} ${input.getAttribute?.('aria-describedby') ?? ''}`.trim();
@@ -132,18 +220,19 @@ globalThis.VerificationFields = (() => {
         if (el) parts.push(cleanNodeText(el));
       }
     }
+    const allowedSet = new Set(allowedGroup ?? [input]);
     let current = input;
-    for (let depth = 0; current && depth < 8; depth++) {
+    for (let depth = 0; current && depth < 11; depth++) {
       const parent = current.parentElement || current.parentNode;
-      if (!parent || parent.nodeType === 9 /* document */) break;
+      if (!parent || parent.nodeType === 9 /* document */ || parent.tagName === 'HTML') break;
       let prev = current.previousElementSibling;
       while (prev) {
-        if (prev.matches?.('input,[contenteditable]') || prev.querySelector?.('input,[contenteditable]')) break;
+        if (hasVisibleEditable(prev)) break;
         const text = cleanNodeText(prev);
         if (text) parts.push(text);
         prev = prev.previousElementSibling;
       }
-      const inputsInParent = parent.querySelectorAll ? parent.querySelectorAll('input') : [];
+      const inputsInParent = [...(parent.querySelectorAll ? parent.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]') : [])].filter(visible);
       if (inputsInParent.length <= 1) {
         const labels = parent.querySelectorAll ? parent.querySelectorAll('label, [class*="label" i], [class*="title" i], legend') : [];
         for (const el of labels) {
@@ -153,12 +242,13 @@ globalThis.VerificationFields = (() => {
           }
         }
       }
-      const others = [...inputsInParent].filter(el => el !== input);
-      const possibleCells = inputsInParent.length >= 4 && inputsInParent.length <= 8 && [...inputsInParent].every(el => el.maxLength === 1 || (el.maxLength < 0 && (el.value ?? '').length <= 1));
+      const others = inputsInParent.filter(el => !allowedSet.has(el));
+      const possibleCells = inputsInParent.length >= 4 && inputsInParent.length <= 8 && inputsInParent.every(el => isGroupCellCandidate(el, inputsInParent.length));
       if (others.some(el => !otpCell(el)) && !possibleCells) break;
       const joinedSoFar = parts.join(' ');
       if (AUTH_STRONG.test(joinedSoFar) || AUTH_RECOVERY.test(joinedSoFar) || AUTH_HARDWARE.test(joinedSoFar) || EMAIL_DELIVERY.test(joinedSoFar) || SMS.test(joinedSoFar)) break;
-      if (parent.matches?.('form,dialog,[role="dialog"],fieldset')) break;
+      if (parent.matches?.('dialog,[role="dialog"],[aria-modal="true"]')) break;
+      if (parent.matches?.('form,fieldset') && others.length > 0 && !possibleCells) break;
       current = parent.host || parent;
     }
     const directParent = input.parentElement || input.parentNode;
@@ -169,8 +259,8 @@ globalThis.VerificationFields = (() => {
     return parts.filter(Boolean).map(text => text.replace(/\s+/g, ' ').trim()).filter(Boolean);
   }
 
-  function contextText(input) {
-    return contextParts(input).join(' ').slice(0, 600);
+  function contextText(input, allowedGroup = null) {
+    return contextParts(input, allowedGroup).join(' ').slice(0, 600);
   }
 
   function outerSingleTargetContext(input, groupInputs = null) {
@@ -182,13 +272,13 @@ globalThis.VerificationFields = (() => {
 
     const parts = [];
     let current = scope;
-    for (let depth = 0; current && depth < 3; depth++) {
+    for (let depth = 0; current && depth < 6; depth++) {
       const parent = current.parentElement;
-      if (!parent || parent.nodeType === 9) break;
+      if (!parent || parent.nodeType === 9 || parent.tagName === 'HTML') break;
       let prev = current.previousElementSibling;
       let count = 0;
       while (prev && count < 4) {
-        if (prev.matches?.('input,[contenteditable]') || prev.querySelector?.('input,[contenteditable]')) break;
+        if (hasVisibleEditable(prev)) break;
         const text = cleanNodeText(prev);
         if (text) parts.push(text);
         prev = prev.previousElementSibling;
@@ -322,6 +412,7 @@ globalThis.VerificationFields = (() => {
     if (input.minLength >= 4 && input.minLength <= 8) value += 1;
     if (/\\d|\[0-9\]/.test(input.pattern ?? '')) value += 1;
     if (maskMatch) value += 2;
+    if (findDecorativeSlotsContainer(input)) value += 3;
     if (input.type === 'password') value -= 2;
     try { if (input === input.ownerDocument?.activeElement) value += 3; } catch {}
     return value;
@@ -335,34 +426,47 @@ globalThis.VerificationFields = (() => {
   function groupFor(input) {
     if (!visible(input)) return null;
     let ancestor = input.parentElement;
-    for (let depth = 0; ancestor && depth < 6; depth++, ancestor = ancestor.parentElement) {
+    for (let depth = 0; ancestor && depth < 12; depth++, ancestor = ancestor.parentElement) {
+      if (ancestor.tagName === 'BODY' || ancestor.tagName === 'HTML') break;
       const inputs = [...ancestor.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]')].filter(candidate => visible(candidate));
       if (inputs.length < 4 || inputs.length > 8 || !inputs.includes(input)) continue;
-      const cellLike = inputs.every(candidate => candidate.maxLength === 1 || (candidate.maxLength < 0 && (candidate.value ?? candidate.textContent).length <= 1) || CELL_ARIA.test(candidate.getAttribute?.('aria-label') ?? '') || ((candidate.isContentEditable || candidate.getAttribute?.('contenteditable') === 'true') && candidate.textContent.length <= 1));
+      const cellLike = inputs.every(candidate => isGroupCellCandidate(candidate, inputs.length));
       if (!cellLike) continue;
+      const strictlySingleChar = inputs.every(c => c.maxLength === 1 || CELL_ARIA.test(c.getAttribute?.('aria-label') ?? ''));
+      if (!strictlySingleChar) {
+        if (!inputs.every(c => c.tagName === inputs[0].tagName && (c.type ?? '') === (inputs[0].type ?? '') && c.maxLength === inputs[0].maxLength)) continue;
+        if (typeof inputs[0].getBoundingClientRect === 'function') {
+          const w0 = inputs[0].getBoundingClientRect().width;
+          if (w0 > 0 && inputs.some(c => { const w = c.getBoundingClientRect().width; return w <= 0 || w > 240; })) continue;
+        }
+      }
       const cleanPrev = el => {
         const prev = el?.previousElementSibling;
-        if (!prev || prev.matches?.('input,[contenteditable]') || prev.querySelector?.('input,[contenteditable]')) return '';
+        if (!prev || hasVisibleEditable(prev)) return '';
         return cleanNodeText(prev);
       };
       const ownText = cleanNodeText(ancestor);
       const ancestorLabel = ancestor.getAttribute?.('aria-label') ?? '';
-      const selfContext = [ownText, contextText(inputs[0]), ancestorLabel].filter(Boolean).join(' ').slice(0, 500);
+      const selfContext = [ownText, contextText(inputs[0], inputs), outerSingleTargetContext(inputs[0], inputs), ancestorLabel].filter(Boolean).join(' ').slice(0, 600);
       const selfStrong = WORDS.test(selfContext) || EMAIL_DELIVERY.test(selfContext) || AUTH_STRONG.test(selfContext) || AUTH_GENERIC.test(selfContext) ||
         inputs.some(candidate => WORDS.test(attributeText(candidate)) || CELL_ARIA.test(attributeText(candidate)) || candidate.autocomplete === 'one-time-code');
-      const context = selfStrong ? selfContext : [
-        selfContext,
-        cleanPrev(ancestor),
-        cleanPrev(ancestor.parentElement),
-        cleanPrev(ancestor.parentElement?.parentElement)
-      ].filter(Boolean).join(' ').slice(0, 500);
+      let context = selfContext;
+      if (!selfStrong) {
+        const extra = [selfContext];
+        let holder = ancestor;
+        for (let up = 0; up < 5 && holder; up++, holder = holder.parentElement) {
+          const txt = cleanPrev(holder);
+          if (txt) extra.push(txt);
+        }
+        context = extra.filter(Boolean).join(' ').slice(0, 600);
+      }
       const strongContext = selfStrong || WORDS.test(context) || EMAIL_DELIVERY.test(context) || AUTH_STRONG.test(context) || AUTH_GENERIC.test(context);
       if (!strongContext) continue;
-      const scoreValue = Math.max(...inputs.map(score)) + 6;
-      if (scoreValue >= 6) {
-        const cls = classifyChannel(inputs[0], context, inputs);
-        return { type: 'group', inputs, score: scoreValue, anchor: inputs.at(-1), context, ...cls, expectedLength: inputs.length };
-      }
+      const rawMax = Math.max(...inputs.map(score));
+      const numericBonus = inputs.some(c => /^(?:numeric|decimal)$/i.test(c.inputMode ?? '') || c.type === 'tel' || /one-time-code/i.test(c.autocomplete ?? '')) ? 1 : 0;
+      const scoreValue = Math.max(0, rawMax) + 6 + numericBonus;
+      const cls = classifyChannel(inputs[0], context, inputs);
+      return { type: 'group', inputs, score: scoreValue, anchor: inputs.at(-1), context, ...cls, expectedLength: inputs.length };
     }
     return null;
   }
@@ -381,6 +485,44 @@ globalThis.VerificationFields = (() => {
     return found;
   }
 
+  function collectCustomOtpField(root = document) {
+    const isEmptySlotEl = el =>
+      /^(?:DIV|SPAN|LI|I|P)$/.test(el.tagName) &&
+      !el.querySelector?.('input,[contenteditable],button,a,select,textarea') &&
+      (el.textContent ?? '').trim().length <= 1 &&
+      elementShown(el);
+
+    for (const part of roots(root)) {
+      const containers = [...(part.querySelectorAll?.('dialog[open],[role="dialog"],[aria-modal="true"],main,form,section,[class*="verify" i],[class*="auth" i],[class*="otp" i]') ?? [])].filter(elementShown);
+      for (const container of containers) {
+        const containerText = (container.textContent ?? '').replace(/\s+/g, ' ').trim();
+        if (containerText.length < 8 || containerText.length > 1500) continue;
+        if (!AUTH_STRONG.test(containerText) && !(WORDS.test(containerText) && /(?:enter|введите|code|код)/i.test(containerText))) continue;
+        if ([...(container.querySelectorAll?.('input,[contenteditable="true"],[contenteditable=""]') ?? [])].some(visible)) continue;
+
+        for (const holder of container.querySelectorAll('div,ul,ol')) {
+          const directTabs = [...holder.children].filter(el => el.hasAttribute?.('tabindex') && isEmptySlotEl(el));
+          if (directTabs.length >= 4 && directTabs.length <= 8 && directTabs.length === holder.children.length) {
+            const ctx = containerText.slice(0, 500);
+            return { type: 'custom-otp', inputs: [directTabs[0]], slots: directTabs, score: 6, anchor: directTabs.at(-1), context: ctx, ...classifyChannel(directTabs[0], ctx), expectedLength: directTabs.length };
+          }
+        }
+        for (const focusEl of container.querySelectorAll('[tabindex]')) {
+          if (!elementShown(focusEl) || focusEl.matches?.('a,button,select,textarea')) continue;
+          const holders = [focusEl, ...focusEl.querySelectorAll('div,ul,ol')];
+          for (const h of holders) {
+            const boxEls = [...h.children].filter(isEmptySlotEl);
+            if (boxEls.length >= 4 && boxEls.length <= 8 && boxEls.length === h.children.length) {
+              const ctx = containerText.slice(0, 500);
+              return { type: 'custom-otp', inputs: [focusEl], slots: boxEls, score: 6, anchor: boxEls.at(-1), context: ctx, ...classifyChannel(focusEl, ctx), expectedLength: boxEls.length };
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   function collectAllFields(root = document, options = {}) {
     const inputs = roots(root).flatMap(part => [...part.querySelectorAll('input, [contenteditable="true"], [contenteditable=""]')]).filter(visible);
     const candidates = [];
@@ -392,7 +534,18 @@ globalThis.VerificationFields = (() => {
         if (!groups.has(key)) { groups.add(key); candidates.push(group); }
       } else if (!otpCell(input)) {
         const cls = classifyChannel(input);
-        candidates.push({ type: 'single', inputs: [input], score: score(input), anchor: input, context: `${contextText(input)} ${outerSingleTargetContext(input)}`.trim().slice(0, 600), ...cls, expectedLength: expectedCodeLength(input) });
+        const slotsInfo = findDecorativeSlotsContainer(input);
+        const anchor = resolveAnchor(input, slotsInfo);
+        candidates.push({
+          type: 'single',
+          inputs: [input],
+          slots: slotsInfo?.slots ?? null,
+          score: score(input),
+          anchor,
+          context: `${contextText(input)} ${outerSingleTargetContext(input)}`.trim().slice(0, 600),
+          ...cls,
+          expectedLength: expectedCodeLength(input) ?? slotsInfo?.slots?.length ?? null
+        });
       }
     }
     const priority = options.preferChannel === 'authenticator'
@@ -400,7 +553,11 @@ globalThis.VerificationFields = (() => {
       : options.allow2fa
         ? { email: 5, authenticator: 4, unknown: 3, sms: 0 }
         : { email: 4, unknown: 3, authenticator: 1, sms: 0 };
-    const usable = candidates.filter(candidate => candidate.score >= 4);
+    let usable = candidates.filter(candidate => candidate.score >= 4);
+    if (!usable.length) {
+      const customField = collectCustomOtpField(root);
+      if (customField) usable = [customField];
+    }
     const modal = usable.filter(candidate => candidate.anchor.closest?.('dialog[open],[role="dialog"],[aria-modal="true"]'));
     const list = modal.length ? modal : usable;
     list.sort((a, b) => priority[b.channel] - priority[a.channel] || b.score - a.score);
@@ -423,39 +580,77 @@ globalThis.VerificationFields = (() => {
     return detectAll(root, { preferChannel: 'authenticator' }).find(candidate => candidate.channel === 'authenticator') ?? null;
   }
 
+  function dispatchPasteEvent(target, code) {
+    let paste;
+    try {
+      const data = new DataTransfer();
+      data.setData('text/plain', code);
+      paste = new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: data });
+    } catch {
+      paste = new Event('paste', { bubbles: true, cancelable: true, composed: true });
+      Object.defineProperty(paste, 'clipboardData', { value: { getData: type => /^(?:text|text\/plain)$/i.test(type) ? code : '' } });
+    }
+    target.dispatchEvent(paste);
+    return paste;
+  }
+
   async function insert(candidate, code) {
-    if (!candidate || !candidate.inputs.every(visible) || !/^[A-Za-z0-9]{4,8}$/.test(code)) return false;
+    const cellReady = el => candidate?.type === 'custom-otp' ? elementShown(el) : visible(el);
+    if (!candidate || !candidate.inputs.every(cellReady) || !/^[A-Za-z0-9]{4,8}$/.test(code)) return false;
     if (candidate.type === 'group' && code.length !== candidate.inputs.length) return false;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     if (!setter && candidate.inputs.some(input => input.tagName === 'INPUT')) return false;
     const settle = () => new Promise(resolve => setTimeout(resolve, 0));
-    const matches = () => candidate.inputs.every((input, index) =>
-      (input.tagName === 'INPUT' ? input.value : input.textContent) === (candidate.type === 'group' ? code[index] : code));
+    const slots = candidate.slots ?? (candidate.type === 'single' ? findDecorativeSlotsContainer(candidate.inputs[0])?.slots ?? null : null);
+    const slotsMatch = () => Boolean(slots?.length && slots.map(s => (s.textContent ?? '').trim()).join('') === code);
+    const matches = () => (candidate.type !== 'custom-otp' && candidate.inputs.every((input, index) =>
+      (input.tagName === 'INPUT' ? input.value : input.textContent) === (candidate.type === 'group' ? code[index] : code))) || slotsMatch();
+
+    if (candidate.type === 'custom-otp') {
+      const target = candidate.inputs[0];
+      target.focus();
+      await settle();
+      dispatchPasteEvent(target, code);
+      await settle();
+      if (slotsMatch()) return true;
+      for (const ch of code) {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+        try {
+          target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: ch }));
+        } catch { /* ignore */ }
+        target.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+        await settle();
+      }
+      return slotsMatch();
+    }
+
+    if (candidate.type === 'single' && slots?.length) {
+      const target = candidate.inputs[0];
+      target.focus();
+      await settle();
+      if (!cellReady(target)) return false;
+      const paste = dispatchPasteEvent(target, code);
+      await settle();
+      if (slotsMatch() || (paste.defaultPrevented && target.value === code)) return true;
+    }
+
     if (candidate.type === 'group') {
       // React OTP components can accept the whole code atomically through paste.
       candidate.inputs[0].focus();
       await settle();
-      if (!candidate.inputs.every(visible)) return false;
-      let paste;
-      try {
-        const data = new DataTransfer();
-        data.setData('text/plain', code);
-        paste = new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: data });
-      } catch {
-        paste = new Event('paste', { bubbles: true, cancelable: true, composed: true });
-        Object.defineProperty(paste, 'clipboardData', { value: { getData: type => /^(?:text|text\/plain)$/i.test(type) ? code : '' } });
-      }
-      candidate.inputs[0].dispatchEvent(paste);
+      if (!candidate.inputs.every(cellReady)) return false;
+      const paste = dispatchPasteEvent(candidate.inputs[0], code);
       await settle();
       if (matches()) return true;
-      if (paste.defaultPrevented) return false;
+      const anyPopulated = candidate.inputs.some(el => (el.tagName === 'INPUT' ? (el.value ?? '') : (el.textContent ?? '')).length > 0);
+      if (paste.defaultPrevented && anyPopulated) return false;
     }
     for (const [index, input] of candidate.inputs.entries()) {
-      if (!candidate.inputs.every(visible)) return false;
+      if (!candidate.inputs.every(cellReady)) return false;
       const value = candidate.type === 'group' ? code[index] : code;
       input.focus();
       await settle();
-      if (!candidate.inputs.every(visible)) return false;
+      if (!candidate.inputs.every(cellReady)) return false;
       if (input.isContentEditable || input.getAttribute?.('contenteditable') === 'true' || input.getAttribute?.('contenteditable') === '') {
         input.textContent = value;
         const inputEvent = typeof InputEvent === 'function' ? new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }) : new Event('input', { bubbles: true });
@@ -467,6 +662,30 @@ globalThis.VerificationFields = (() => {
         input.dispatchEvent(inputEvent);
         input.dispatchEvent(new Event('change', { bubbles: true }));
       }
+      await settle();
+    }
+    if (!slots?.length) return matches();
+    if (slotsMatch()) return true;
+
+    const target = candidate.inputs[0];
+    if (slots.every(s => !(s.textContent ?? '').trim())) {
+      if (setter && cellReady(target)) {
+        setter.call(target, '');
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+      }
+      for (const ch of code) {
+        if (!cellReady(target)) return false;
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+        if (setter) {
+          setter.call(target, `${target.value ?? ''}${ch}`);
+          const inputEvent = typeof InputEvent === 'function' ? new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch }) : new Event('input', { bubbles: true });
+          target.dispatchEvent(inputEvent);
+        }
+        target.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+        await settle();
+      }
+      target.dispatchEvent(new Event('change', { bubbles: true }));
       await settle();
     }
     return matches();

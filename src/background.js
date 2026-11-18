@@ -28,8 +28,16 @@ import {
   listAllTotpCodes,
   importTotpPayload,
   exportTotpVault,
+  refreshTotpSiteHints,
   describeTotpError
 } from './totp.js';
+
+let hintsRefreshed = false;
+async function ensureTotpHintsFresh() {
+  if (hintsRefreshed) return;
+  hintsRefreshed = true;
+  await refreshTotpSiteHints().catch(() => {});
+}
 
 const sessions = new SessionStore();
 const errors = {
@@ -586,6 +594,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       const command = payload.command;
       try {
         if (command === 'status') {
+          await ensureTotpHintsFresh();
           const vaultStatus = await getTotpVaultStatus();
           const tabSession = Number.isInteger(payload.tabId) ? sessions.get(sessionKey(payload.tabId, 0)) : null;
           const mergedCtx = {
@@ -596,6 +605,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           return { status: 'ok', ...vaultStatus, siteMatch };
         }
         if (command === 'list_all') {
+          await ensureTotpHintsFresh();
           const tabSession = Number.isInteger(payload.tabId) ? sessions.get(sessionKey(payload.tabId, 0)) : null;
           const mergedCtx = {
             ...(payload.siteContext ?? {}),
@@ -654,6 +664,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     }
     if (request.type === 'GET_TOTP_INLINE') {
       if (!sender.tab?.id || originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid page.' };
+      await ensureTotpHintsFresh();
       const tabSession = sessions.get(sessionKey(sender.tab.id, sender.frameId ?? 0));
       const mergedCtx = {
         ...(request.siteContext ?? {}),
@@ -780,8 +791,14 @@ function setupContextMenus() {
   }
 }
 
-chrome.runtime?.onInstalled?.addListener?.(setupContextMenus);
-chrome.runtime?.onStartup?.addListener?.(setupContextMenus);
+chrome.runtime?.onInstalled?.addListener?.(() => {
+  setupContextMenus();
+  void refreshTotpSiteHints().catch(() => {});
+});
+chrome.runtime?.onStartup?.addListener?.(() => {
+  setupContextMenus();
+  void refreshTotpSiteHints().catch(() => {});
+});
 chrome.contextMenus?.onClicked?.addListener?.((info, tab) => {
   if (info?.menuItemId === 'codesnap-fill-code' && tab) {
     void triggerQuickFill(tab, info);

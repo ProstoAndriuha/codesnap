@@ -452,6 +452,7 @@ async function switchMode(mode, initialDrawer = null) {
         tab,
         origin: origin ?? '',
         siteContext: fieldStatus?.siteContext ?? {},
+        has2faField: Boolean(fieldStatus?.has2faField || fieldStatus?.channel === 'authenticator'),
         initialDrawer,
         onCountChange: count => {
           const badge = $('authCountBadge');
@@ -459,7 +460,12 @@ async function switchMode(mode, initialDrawer = null) {
         }
       });
     } else {
-      await authController.setContext({ tab, origin: origin ?? '', siteContext: fieldStatus?.siteContext ?? {} });
+      await authController.setContext({
+        tab,
+        origin: origin ?? '',
+        siteContext: fieldStatus?.siteContext ?? {},
+        has2faField: Boolean(fieldStatus?.has2faField || fieldStatus?.channel === 'authenticator')
+      });
       if (initialDrawer === 'import') authController.openImport();
     }
   } else {
@@ -811,7 +817,15 @@ async function searchLatest(refreshField = true) {
   if (refreshField) await refreshFieldStatus();
   if (generation !== searchGeneration) return;
   if (fieldStatus?.channel === 'authenticator') {
-    show(totpSiteMatch?.status === 'found' ? '2FA-код готов ниже ↓ Нажмите для вставки.' : 'This field needs a different kind of code.');
+    if (totpSiteMatch?.status === 'found') {
+      show('2FA-код готов ниже ↓ Нажмите для вставки.');
+    } else if (totpSiteMatch?.status === 'choose') {
+      show('Выберите нужный 2FA-аккаунт ниже ↓');
+    } else if ((totpVault?.count ?? 0) > 0) {
+      show('Поле 2FA (Google Authenticator). Откройте «🔐 Аутентификатор» выше, чтобы вставить или привязать ключ к сайту.');
+    } else {
+      show('Это поле для приложения 2FA (Google Authenticator). Добавьте или импортируйте ключ 2FA ниже.');
+    }
     return;
   }
   if (fieldStatus?.channel === 'sms') { show('This field needs a different kind of code.'); return; }

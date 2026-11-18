@@ -18,15 +18,18 @@ async function initStandalone() {
   }
 
   let siteContext = {};
+  let has2faField = false;
   if (targetTab?.id && origin.startsWith('https://')) {
     const status = await chrome.tabs.sendMessage(targetTab.id, { type: 'FIELD_STATUS' }, { frameId: 0 }).catch(() => null);
     if (status?.siteContext) siteContext = status.siteContext;
+    has2faField = Boolean(status?.has2faField || status?.channel === 'authenticator');
   }
 
   await mountAuthenticatorView(document.getElementById('standaloneAuthRoot'), {
     tab: targetTab,
     origin,
     siteContext,
+    has2faField,
     initialDrawer: params.get('drawer') || null
   });
 }
