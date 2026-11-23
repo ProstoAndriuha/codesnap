@@ -1,3 +1,4 @@
+import { importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -44,7 +45,7 @@ test('local multi-mail search scans open webmail tabs without servers and respec
     }
   };
   try {
-    await import(`../src/background.js?localmail=${Math.random()}`);
+    await importBackground(`../src/background.js?localmail=${Math.random()}`);
     const send = (request, sender) => new Promise(resolve => listener(request, sender, resolve));
     const found = await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field', channel: 'email', accountSelection: 'local:tab:42' }, {});
     assert.equal(found.status, 'found');
@@ -52,9 +53,11 @@ test('local multi-mail search scans open webmail tabs without servers and respec
     assert.equal(found.accountEmail, 'owner@yandex.ru');
     assert.equal(found.accountProvider, 'yandex');
     assert.deepEqual(scannedTabs, [42]);
+    const pinFound = await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field', channel: 'email', accountSelection: 'local:pin:yandex' }, {});
+    assert.equal(pinFound.code, '483921');
 
     webmailEnabled = false;
-    assert.equal((await send({ type: 'INSERT_POPUP', tabId: 1, origin: 'https://example.com', sessionId: found.sessionId }, {})).status, 'expired');
+    assert.equal((await send({ type: 'INSERT_POPUP', tabId: 1, origin: 'https://example.com', sessionId: pinFound.sessionId }, {})).status, 'expired');
     const callsBefore = scannedTabs.length;
     assert.notEqual((await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field', channel: 'email', accountSelection: 'local:tab:42' }, {})).status, 'found');
     assert.equal(scannedTabs.length, callsBefore);

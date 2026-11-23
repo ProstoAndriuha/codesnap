@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -42,10 +43,10 @@ test('KAST email-address step does not start an OTP lookup before the code field
     runtime: { onMessage: { addListener() {} }, sendMessage: async () => { searches++; return { status: 'none' }; } },
     storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(searches, 0);
-  assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]'), null);
+  assert.equal(inlineChip(dom.window.document), null);
   dom.window.close();
 });
 
@@ -152,13 +153,13 @@ test('failed insertion does not show a success checkmark in the inline chip', as
     runtime: { onMessage: { addListener(fn) { listener = fn; } } },
     storage: { local: { get: async () => ({ autoWatch: false }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   await new Promise(resolve => setTimeout(resolve, 20));
   dom.window.document.querySelector('input').addEventListener('input', event => { event.target.value = ''; });
   const status = await new Promise(resolve => listener({ type: 'FIELD_STATUS' }, null, resolve));
   const result = await new Promise(resolve => listener({ type: 'INSERT_CODE', origin: dom.window.location.origin, fieldId: status.fieldId, code: '310683' }, null, resolve));
   assert.equal(result.status, 'missing');
-  assert.notEqual(dom.window.document.querySelector('button[aria-label="Find verification code"]').textContent, '✓');
+  assert.notEqual(inlineChip(dom.window.document).textContent, '✓');
   dom.window.close();
 });
 
@@ -215,7 +216,7 @@ test('content script detects a field added after initial page load', async () =>
   let fieldNumber = 0;
   dom.window.crypto.randomUUID = () => `field-${++fieldNumber}`;
   dom.window.chrome = { runtime: { onMessage: { addListener(fn) { listener = fn; } } }, storage: { local: { get: async () => ({ autoWatch: false }) }, onChanged: { addListener() {} } } };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   const before = await new Promise(resolve => listener({ type: 'FIELD_STATUS' }, null, resolve));
   assert.equal(before.detected, false);
   dom.window.document.body.innerHTML = '<label>Security code</label><div><input maxlength="6" autocomplete="one-time-code"></div>';
@@ -242,10 +243,10 @@ test('automatic watch shows an email code beside the field and skips authenticat
       runtime: { onMessage: { addListener() {} }, sendMessage: async () => { searches++; return { status: 'found', code: '483921', sessionId: 'session' }; } },
       storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
     };
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource);
     await new Promise(resolve => setTimeout(resolve, 40));
     assert.equal(searches, shouldSearch ? 1 : 0, label);
-    assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]')?.textContent ?? null, shouldSearch ? '483921' : null);
+    assert.equal(inlineChip(dom.window.document)?.textContent ?? null, shouldSearch ? '483921' : null);
     dom.window.close();
   }
 });
@@ -258,10 +259,10 @@ test('automatic watch is enabled when the user has not saved a preference', asyn
     runtime: { onMessage: { addListener() {} }, sendMessage: async () => { searches++; return { status: 'found', code: '483921', sessionId: 'session' }; } },
     storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(searches, 1);
-  assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]')?.textContent, '483921');
+  assert.equal(inlineChip(dom.window.document)?.textContent, '483921');
   dom.window.close();
 });
 
@@ -275,9 +276,9 @@ test('invalidated extension offers page reload instead of retrying the disconnec
     runtime: { onMessage: { addListener() {} }, sendMessage() { searches++; throw new Error('Extension context invalidated.'); } },
     storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource.replaceAll('if (!event.isTrusted) return;', '').replace('location.reload();', 'globalThis.__testReload();'));
+  evaluateContent(dom.window, contentSource.replaceAll('if (!event.isTrusted) return;', '').replace('location.reload();', 'globalThis.__testReload();'));
   await new Promise(resolve => setTimeout(resolve, 40));
-  const chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+  const chip = inlineChip(dom.window.document);
   assert.equal(chip.textContent, 'Reload');
   assert.match(chip.title, /updated.*Reload/i);
   dom.window.document.querySelector('input').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
@@ -300,9 +301,9 @@ test('ordinary Gmail failures remain retryable and a retry can find the code', a
     } },
     storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource.replaceAll('if (!event.isTrusted) return;', ''));
+  evaluateContent(dom.window, contentSource.replaceAll('if (!event.isTrusted) return;', ''));
   await new Promise(resolve => setTimeout(resolve, 40));
-  const chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+  const chip = inlineChip(dom.window.document);
   assert.equal(chip.textContent, 'Retry');
   chip.click();
   await new Promise(resolve => setTimeout(resolve, 40));
@@ -328,9 +329,9 @@ test('third-party email code can be reviewed and inserted beside the field', asy
   };
   // jsdom cannot synthesize trusted clicks; keep every other production path intact.
   const clickable = contentSource.replaceAll('if (!event.isTrusted) return;', '').replaceAll('if (!event.isTrusted || fieldId !== item.fieldId) return;', 'if (fieldId !== item.fieldId) return;');
-  dom.window.eval(clickable);
+  evaluateContent(dom.window, clickable);
   await new Promise(resolve => setTimeout(resolve, 40));
-  const chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+  const chip = inlineChip(dom.window.document);
   assert.equal(chip.textContent, 'Review');
   chip.click();
   const panel = dom.window.document.getElementById('codesnap-inline-panel');
@@ -359,9 +360,9 @@ test('clicking the searching chip starts a manual lookup instead of ignoring the
     },
     storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource.replaceAll('if (!event.isTrusted) return;', ''));
+  evaluateContent(dom.window, contentSource.replaceAll('if (!event.isTrusted) return;', ''));
   await new Promise(resolve => setTimeout(resolve, 25));
-  const chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+  const chip = inlineChip(dom.window.document);
   assert.equal(chip.textContent, 'Finding…');
   chip.click();
   await new Promise(resolve => setTimeout(resolve, 25));

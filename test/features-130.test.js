@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -321,10 +322,10 @@ test('Feature #6 Withdraw Check extracts amount/wallet and renders only when set
 
   try {
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource);
     await new Promise(r => setTimeout(r, 60));
 
-    const chipOff = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+    const chipOff = inlineChip(dom.window.document);
     assert.ok(chipOff);
     assert.equal(chipOff.textContent, '482910');
 
@@ -365,7 +366,7 @@ test('Feature #8 Smart Multi-Cell Paste Helper stays idle on load and distribute
 
   try {
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource.replace('if (!e.isTrusted) return;', ''));
     await new Promise(r => setTimeout(r, 40));
 
     assert.equal(runtimeMessages, 0);

@@ -11,7 +11,9 @@
   let webmailHint = null;
   let sessionId = null;
   let chip = null;
+  let chipHost = null;
   let panel = null;
+  let panelRoot = null;
   let review = null;
   let notice = null;
   let searchMode = null;
@@ -70,7 +72,8 @@
   function stopTotpTimer() { clearInterval(totpTimer); totpTimer = null; }
   function stopChipExpiryTimer() { clearInterval(chipExpiryTimer); chipExpiryTimer = null; }
 
-  function closePanel() { stopPanelTimer(); panel?.remove(); panel = null; }
+  function closePanel() { stopPanelTimer(); panel?.remove(); panel = null; panelRoot = null; }
+  function closeChip() { chipHost?.remove(); chipHost = null; chip = null; clearPadding(); }
 
   function contextInvalidated(error = null) {
     return /(?:extension context invalidated|context.*(?:destroyed|invalidated))/i.test(String(error?.message ?? ''));
@@ -129,7 +132,7 @@
     const host = document.createElement('div');
     host.id = 'codesnap-toast';
     host.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:2147483647;pointer-events:none;font:650 13px/1.35 system-ui,sans-serif';
-    const root = host.attachShadow({ mode: 'open' });
+    const root = host.attachShadow({ mode: 'closed' });
     const pill = document.createElement('div');
     pill.style.cssText = dark
       ? 'padding:10px 14px;border:1px solid #415185;border-radius:11px;background:#151c30f2;color:#eef2ff;box-shadow:0 10px 28px rgba(0,0,0,.55)'
@@ -143,10 +146,9 @@
 
   async function muteCurrentOrigin() {
     try {
-      const data = (await chrome.storage.local.get('mutedOrigins')) ?? {};
-      const next = [...new Set([...(Array.isArray(data.mutedOrigins) ? data.mutedOrigins : []), location.origin])];
-      mutedOrigins = next;
-      await chrome.storage.local.set?.({ mutedOrigins: next });
+      const result = await chrome.runtime.sendMessage({ type: 'MUTE_CONTENT_ORIGIN' });
+      if (result?.status !== 'ok') return;
+      mutedOrigins = [...new Set([...mutedOrigins, location.origin])];
       closePanel();
       paint();
       showToast(`CodeSnap скрыт на ${location.hostname}`);
@@ -203,7 +205,7 @@
     const rect = resolveVisibleAnchorRect(field.anchor);
     host.style.left = `${Math.max(8, Math.min(innerWidth - 264, rect.right - 256))}px`;
     host.style.top = `${rect.bottom + 150 < innerHeight ? rect.bottom + 7 : Math.max(8, rect.top - 150)}px`;
-    const root = host.attachShadow({ mode: 'open' });
+    const root = host.attachShadow({ mode: 'closed' });
     const box = document.createElement('div');
     box.style.cssText = dark
       ? 'padding:13px;border:1px solid #334066;border-radius:13px;background:#151c30;box-shadow:0 12px 32px rgba(0,0,0,.6);color:#e8ebff'
@@ -228,7 +230,7 @@
       box.append(button);
     }
     appendMuteFooter(box, dark);
-    root.append(box); document.documentElement.append(host); panel = host;
+    root.append(box); document.documentElement.append(host); panel = host; panelRoot = root;
   }
 
   function applyChipAppearance(isDanger = false, isGrace = false) {
@@ -361,12 +363,12 @@
       const rem = period - (((epochSec % period) + period) % period);
       totpDetails.remainingSeconds = rem;
       updateChipDisplay();
-      const liveEl = panel?.shadowRoot?.querySelector?.('.totp-live');
+      const liveEl = panelRoot?.querySelector('.totp-live');
       if (liveEl && totpDetails.code) {
         liveEl.textContent = `${totpDetails.code.replace(/^(.{3})(.{3})$/, '$1 $2')} · ${rem}s`;
       }
-      if (totpDetails.status === 'choose' && panel?.shadowRoot) {
-        for (const el of panel.shadowRoot.querySelectorAll('.totp-cand-live')) {
+      if (totpDetails.status === 'choose' && panelRoot) {
+        for (const el of panelRoot.querySelectorAll('.totp-cand-live')) {
           const cid = el.getAttribute('data-cand-id');
           const c = totpDetails.candidates?.find(x => x.id === cid);
           if (c) {
@@ -405,7 +407,7 @@
         stopTotpTimer();
         if (field?.channel === 'authenticator') {
           closePanel();
-          chip?.remove(); chip = null; clearPadding();
+          closeChip();
         }
       }
       position();
@@ -606,7 +608,7 @@
     showPanel('CodeSnap', headerNote);
     panel.dataset.kind = 'codes';
     panel.style.width = '328px';
-    const root = panel.shadowRoot;
+    const root = panelRoot;
     const box = root.firstElementChild;
     const muteFooter = box.querySelector(':scope > div:last-child');
     muteFooter?.remove();
@@ -984,7 +986,7 @@
       watchGeneration++; searching = false;
       stopTotpTimer(); stopChipExpiryTimer();
       field = null; fieldId = null; detectedAt = null; code = null; link = null; webmailHint = null; sessionId = null; review = null; notice = null; codeDetails = null; choices = null; totpDetails = null; closePanel();
-      chip?.remove(); chip = null; clearPadding();
+      closeChip();
       return;
     }
     const cf = currentCustomField();
@@ -999,7 +1001,7 @@
       watchGeneration++; searching = false;
       stopTotpTimer(); stopChipExpiryTimer();
       field = null; fieldId = null; detectedAt = null; code = null; link = null; webmailHint = null; sessionId = null; review = null; notice = null; codeDetails = null; choices = null; totpDetails = null; closePanel();
-      chip?.remove(); chip = null; clearPadding();
+      closeChip();
       return;
     }
     if (!sameField(field, found)) {
@@ -1016,7 +1018,7 @@
     if (!phishingAlert?.suspicious && ((field.channel === 'authenticator' && !allow2faHere) || field.channel === 'sms')) {
       stopTotpTimer();
       closePanel(); review = null;
-      chip?.remove(); chip = null; clearPadding();
+      closeChip();
       return;
     }
     if (!chip) {
@@ -1111,7 +1113,10 @@
         }
         void watch(currentFieldId, false);
       });
-      document.documentElement.append(chip);
+      chipHost = document.createElement('div');
+      chipHost.id = 'codesnap-inline-chip';
+      chipHost.attachShadow({ mode: 'closed' }).append(chip);
+      document.documentElement.append(chipHost);
     }
     position();
     updateChipDisplay();
@@ -1260,7 +1265,7 @@
     host.style.left = `${Math.max(8, Math.min(innerWidth - 280, rect.right - 220))}px`;
     host.style.top = `${rect.bottom + 42 < innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - 40)}px`;
 
-    const root = host.attachShadow({ mode: 'open' });
+    const root = host.attachShadow({ mode: 'closed' });
     const wrap = document.createElement('div');
     wrap.style.cssText = dark
       ? 'display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid #4d62a3;border-radius:999px;background:#151c30f7;color:#eef2ff;box-shadow:0 8px 24px rgba(0,0,0,.55)'
@@ -1272,6 +1277,7 @@
     btn.textContent = `📋 Разложить ${cleanCode} по ячейкам`;
     btn.style.cssText = 'border:0;background:none;padding:2px 4px;color:inherit;font:inherit;cursor:pointer;white-space:nowrap';
     btn.addEventListener('click', async e => {
+      if (!e.isTrusted) return;
       e.preventDefault();
       e.stopPropagation();
       const ok = await detector.insert(group, cleanCode);
@@ -1368,7 +1374,11 @@
     return false;
   }
 
-  chrome.runtime.onMessage.addListener((request, _sender, respond) => {
+  chrome.runtime.onMessage.addListener((request, sender, respond) => {
+    if (request.type === 'CONTENT_SETTINGS_CHANGED') {
+      if (sender.id === chrome.runtime.id) updateContentSettings(request.changes, request.area);
+      return;
+    }
     if (request.type === 'CODE_FOUND') {
       if (request.fieldId && request.fieldId !== fieldId) { respond?.({ status: 'changed' }); return; }
       watchGeneration++; searching = false; searchMode = null;
@@ -1684,7 +1694,7 @@
 
     let start = null;
     const onPointerDown = e => {
-      if (e.composedPath().includes(bar)) return;
+      if (!e.isTrusted || e.composedPath().includes(bar)) return;
       e.preventDefault();
       start = { x: e.clientX, y: e.clientY };
       box.style.display = 'block';
@@ -1705,7 +1715,7 @@
       box.style.height = `${h}px`;
     };
     const onPointerUp = async e => {
-      if (!start) return;
+      if (!e.isTrusted || !start) return;
       const rect = {
         x: Math.min(start.x, e.clientX),
         y: Math.min(start.y, e.clientY),
@@ -1807,7 +1817,7 @@
       highlight.style.height = `${r.height + 6}px`;
     };
     const onClick = async e => {
-      if (e.composedPath().includes(bar)) return;
+      if (!e.isTrusted || e.composedPath().includes(bar)) return;
       e.preventDefault();
       e.stopPropagation();
       const target = e.target;
@@ -1817,9 +1827,9 @@
         showToast('Не удалось определить поле — нажмите прямо внутрь поля или ячейки');
         return;
       }
-      const next = { ...(customFieldSelectors ?? {}), [location.origin]: { ...desc, updatedAt: Date.now() } };
-      customFieldSelectors = next;
-      await chrome.storage.local.set({ customFieldSelectors: next }).catch(() => {});
+      const result = await chrome.runtime.sendMessage({ type: 'SAVE_CONTENT_FIELD', descriptor: desc }).catch(() => null);
+      if (result?.status !== 'ok') { showToast('Не удалось сохранить поле'); return; }
+      customFieldSelectors = { ...customFieldSelectors, [location.origin]: desc };
       showToast(`Поле запомнено для ${location.hostname}`);
       paint();
     };
@@ -1838,7 +1848,7 @@
     };
   }
 
-  chrome.storage.local.get(['autoWatch', 'detailedPopup', 'showWithdrawalDetails', 'totpTimeOffsetSeconds', 'totpEnabled', 'totpSiteHints', 'mutedOrigins', 'phishingTrustedOrigins', 'customFieldSelectors']).then(settings => {
+  chrome.runtime.sendMessage({ type: 'GET_CONTENT_SETTINGS' }).then(settings => {
     detailedPopup = settings.detailedPopup === true;
     showWithdrawalDetails = settings.showWithdrawalDetails === true;
     totpTimeOffsetSeconds = Number(settings.totpTimeOffsetSeconds) || 0;
@@ -1852,7 +1862,7 @@
   }).catch(error => {
     if (contextInvalidated(error)) showReloadRequired();
   });
-  chrome.storage.onChanged.addListener((changes, area) => {
+  function updateContentSettings(changes, area) {
     if (area === 'local' && changes.showWithdrawalDetails) {
       showWithdrawalDetails = changes.showWithdrawalDetails.newValue === true;
       updateChipDisplay();
@@ -1902,6 +1912,6 @@
       else paint();
     }
     if (autoWatch && ((area === 'local' && changes.primaryEmail) || (area === 'session' && changes.extraAccounts))) paint();
-  });
+  }
   paint();
 })();

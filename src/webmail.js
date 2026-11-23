@@ -136,7 +136,6 @@ globalThis.CodeSnapWebmail = (() => {
     const text = String(rawText ?? '').replace(/\s+/g, ' ').trim();
     if (!text) return null;
     if (/(?:вчера|yesterday|позавчера|hier|ayer|gestern|ieri)/i.test(text)) return null;
-    if (/(?:^|\D)\d+\s*(?:ч(?:ас(?:а|ов)?)?|h|hr|hrs|hours?|д(?:н(?:я|ей)?|ays?)?|нед|weeks?|мес|months?|г|years?)(?=$|[^A-Za-zА-Яа-яЁё])/i.test(text)) return null;
 
     if (/(?:только\s+что|сейчас|just\s*now|moments?\s+ago|<\s*1\s*(?:m|min|мин))/i.test(text)) return now - 5_000;
     const secMatch = /(?:^|\D)(\d{1,2})\s*(?:сек(?:унд[ауы]?)?|secs?|seconds?)(?=$|[^A-Za-zА-Яа-яЁё])/i.exec(text);
@@ -147,15 +146,22 @@ globalThis.CodeSnapWebmail = (() => {
       return mins <= 20 ? now - mins * 60_000 : null;
     }
 
-    if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
-      const ts = Date.parse(text);
-      if (Number.isFinite(ts) && now - ts >= -60_000 && now - ts <= 20 * 60_000) return ts;
-      return null;
-    }
-
     const hasMonthWord = /(?:^|[^A-Za-zА-Яа-яЁё])(?:янв|фев|мар|апр|мая|май|июн|июл|авг|сен|окт|ноя|дек|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(text);
     const hasSlashDate = /\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/.test(text);
     const clock = /\b(\d{1,2}):(\d{2})(?:\s*(AM|PM))?\b/i.exec(text);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(text) || (clock && (hasMonthWord || hasSlashDate))) {
+      const ruMonths = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+      const enMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const byName = /(\d{1,2})\s+([а-яё]+)\.?\s*(\d{4})?(?:\s*г\.)?/i.exec(text);
+      const byNumber = /\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b/.exec(text);
+      const month = byName ? ruMonths.indexOf(byName[2].toLowerCase().slice(0, 3)) : -1;
+      let absolute = text.replace(/\s+at\s+/gi, ' ');
+      if (month >= 0) absolute = `${enMonths[month]} ${byName[1]}, ${byName[3] || new Date(now).getFullYear()} ${clock[0]}`;
+      if (byNumber) absolute = `${enMonths[Number(byNumber[2]) - 1]} ${byNumber[1]}, ${byNumber[3]} ${clock[0]}`;
+      const ts = Date.parse(absolute);
+      return Number.isFinite(ts) && now - ts >= -60_000 && now - ts <= 20 * 60_000 ? ts : null;
+    }
+    if (/(?:^|\D)\d+\s*(?:ч(?:ас(?:а|ов)?)?|h|hr|hrs|hours?|д(?:н(?:я|ей)?|ays?)?|нед|weeks?|мес|months?|г|years?)(?=$|[^A-Za-zА-Яа-яЁё])/i.test(text)) return null;
     if (clock && !hasMonthWord && !hasSlashDate) {
       let hours = Number(clock[1]);
       const minutes = Number(clock[2]);
@@ -196,7 +202,7 @@ globalThis.CodeSnapWebmail = (() => {
     for (const sel of selectors ?? []) {
       const el = root.querySelector?.(sel);
       if (!el) continue;
-      const candidate = el.getAttribute?.('datetime') || el.getAttribute?.('title') || el.getAttribute?.('aria-label') || el.textContent;
+      const candidate = el.getAttribute?.('datetime') || el.getAttribute?.('data-email') || el.getAttribute?.('title') || el.getAttribute?.('aria-label') || el.textContent;
       const clean = String(candidate ?? '').replace(/\s+/g, ' ').trim();
       if (clean) return clean;
     }
@@ -268,11 +274,7 @@ globalThis.CodeSnapWebmail = (() => {
       const subject = firstText(scope, profile.subject ?? ['h1', 'h2']) || firstText(doc, profile.subject ?? ['h1', 'h2']);
       const from = firstText(scope, profile.sender ?? ['[email]', '[data-email]', '[title*="@"]']) || firstText(doc, profile.sender ?? []);
       const timeStr = firstAttrOrText(scope, profile.time ?? ['time']) || firstAttrOrText(doc, profile.time ?? []);
-      const sig = `open:${provider}:${from}:${subject}:${body.slice(0, 80)}`;
-      let ts = timeStr ? parseRelativeTimestamp(timeStr, now) : null;
-      if (ts === null && !timeStr) {
-        ts = seenTimestamps.get(sig) ?? (now - 8_000);
-      }
+      const ts = parseRelativeTimestamp(timeStr, now);
       if (ts !== null) {
         messages.push({
           id: `webmail-${provider}-open-${idx}`,
@@ -302,14 +304,14 @@ globalThis.CodeSnapWebmail = (() => {
       const subject = firstText(row, profile.rowSubject ?? ['[role="link"]', 'a', 'span']) || '';
       const snippet = firstText(row, profile.rowSnippet ?? []) || '';
       const rowText = (row.textContent || '').replace(/\s+/g, ' ').trim();
-      const timeStr = firstAttrOrText(row, profile.rowTime ?? ['time']) || rowText;
-      const sig = `row:${provider}:${from}:${subject}:${snippet.slice(0, 60)}`;
+      const timeStr = firstAttrOrText(row, profile.rowTime ?? ['time']);
+      const sig = `row:${provider}:${from}:${subject}:${snippet.slice(0, 80)}`;
       let ts = parseRelativeTimestamp(timeStr, now);
       const isUnread = Boolean(
         (profile.rowUnread && (row.matches?.(profile.rowUnread) || row.querySelector?.(profile.rowUnread))) ||
         /unread|непрочитан/i.test(row.getAttribute?.('aria-label') ?? '')
       );
-      if (ts === null && seenTimestamps.has(sig) && !/(?:вчера|yesterday|\d+\s*(?:ч|час|h|hr|дн|d|days)|\b(?:янв|фев|мар|апр|мая|май|июн|июл|авг|сен|окт|ноя|дек|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b)/i.test(timeStr)) {
+      if (!timeStr && seenTimestamps.has(sig)) {
         ts = seenTimestamps.get(sig);
       }
       if (ts === null) continue;
@@ -324,7 +326,8 @@ globalThis.CodeSnapWebmail = (() => {
           links: [],
           timestamp: ts,
           accountEmail,
-          accountProvider: provider
+          accountProvider: provider,
+          snapshotKey: sig
         });
       }
       if (isUnread) {
@@ -338,6 +341,8 @@ globalThis.CodeSnapWebmail = (() => {
   if (typeof location !== 'undefined' && typeof document !== 'undefined') {
     const provider = detectProvider(location.hostname, location.pathname);
     if (provider) {
+      let enabled = false;
+      let settingRevision = 0;
       const seenTimestamps = new Map();
       const pushedSignatures = new Set();
       const rememberPush = sig => {
@@ -351,8 +356,7 @@ globalThis.CodeSnapWebmail = (() => {
         const newMessages = [];
         const newHints = [];
         for (const msg of scan.messages) {
-          const tsSig = `${msg.id.includes('-open-') ? 'open' : 'row'}:${provider}:${msg.from}:${msg.subject}:${String(msg.body ?? '').slice(0, 80)}`;
-          if (!seenTimestamps.has(tsSig)) seenTimestamps.set(tsSig, msg.timestamp);
+          if (msg.snapshotKey && !seenTimestamps.has(msg.snapshotKey)) seenTimestamps.set(msg.snapshotKey, msg.timestamp);
           const pushSig = `${msg.id.includes('-open-') ? 'open' : 'row'}:${provider}:${msg.from}:${msg.subject}:${String(msg.body ?? '').slice(0, 140)}:${msg.links?.length ?? 0}`;
           if (!pushedSignatures.has(pushSig)) {
             rememberPush(pushSig);
@@ -379,6 +383,7 @@ globalThis.CodeSnapWebmail = (() => {
       };
       let timer = null;
       const notifyReady = () => {
+        if (!enabled) return;
         const scan = recordSnapshots(false);
         globalThis.chrome?.runtime?.sendMessage?.({
           type: 'WEBMAIL_READY',
@@ -391,19 +396,30 @@ globalThis.CodeSnapWebmail = (() => {
       if (typeof MutationObserver === 'function') {
         const obs = new MutationObserver(() => {
           clearTimeout(timer);
-          timer = setTimeout(() => recordSnapshots(true), 140);
+          if (enabled) timer = setTimeout(() => { if (enabled) recordSnapshots(true); }, 140);
         });
-        obs.observe(document.documentElement, { childList: true, subtree: true });
+        obs.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
       }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', notifyReady, { once: true });
-      else notifyReady();
       document.addEventListener('visibilitychange', () => { if (!document.hidden) notifyReady(); });
-      globalThis.chrome?.runtime?.onMessage?.addListener((request, _sender, respond) => {
+      const runtime = globalThis.chrome?.runtime;
+      runtime?.onMessage?.addListener((request, sender, respond) => {
+        const change = request?.type === 'CONTENT_SETTINGS_CHANGED' && request.area === 'local' && request.changes?.localWebmailEnabled;
+        if (change && sender?.id === runtime.id) {
+          settingRevision++;
+          enabled = change.newValue !== false;
+          if (enabled) notifyReady();
+          else { seenTimestamps.clear(); pushedSignatures.clear(); }
+        }
         if (request?.type === 'SCAN_WEBMAIL') {
-          respond({ ok: true, ...scanDocument(document, location.hostname, Date.now(), seenTimestamps) });
+          respond(enabled ? { ok: true, ...scanDocument(document, location.hostname, Date.now(), seenTimestamps) } : { ok: false });
           return false;
         }
       });
+      runtime?.sendMessage?.({ type: 'GET_WEBMAIL_ENABLED' })?.then(result => {
+        if (settingRevision || !result?.enabled) return;
+        enabled = true;
+        notifyReady();
+      }).catch(() => {});
     }
   }
 

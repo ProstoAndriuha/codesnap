@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip, importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -166,10 +167,10 @@ test('Inline 2FA stays silent on sites without matching secret and performs 1-cl
       }
     };
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource);
     await new Promise(r => setTimeout(r, 40));
     assert.equal(messagesSent, 0);
-    assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]'), null);
+    assert.equal(inlineChip(dom.window.document), null);
     dom.window.close();
   }
 
@@ -236,7 +237,7 @@ test('Inline 2FA stays silent on sites without matching secret and performs 1-cl
 
   try {
     await addTotpAccount(`otpauth://totp/Binance:alice@gmail.com?secret=${secret}&issuer=Binance`, {}, now);
-    await import(`../src/background.js?dual=${Math.random()}`);
+    await importBackground(`../src/background.js?dual=${Math.random()}`);
 
     dom.window.crypto.randomUUID = (() => { let n = 0; return () => `f-${++n}`; })();
     dom.window.chrome = {
@@ -254,11 +255,11 @@ test('Inline 2FA stays silent on sites without matching secret and performs 1-cl
     };
 
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource.replaceAll('if (!event.isTrusted) return;', ''));
+    evaluateContent(dom.window, contentSource.replaceAll('if (!event.isTrusted) return;', ''));
 
     let chip;
     for (let i = 0; i < 30; i++) {
-      chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+      chip = inlineChip(dom.window.document);
       if (chip?.textContent === '483921 + 2FA') break;
       await new Promise(r => setTimeout(r, 25));
     }
@@ -299,7 +300,7 @@ test('SCAN_PAGE_TOTP extracts otpauth link, BarcodeDetector QR and manual Base32
     };
     setupWindow(dom.window);
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource);
     const res = await new Promise(resolve => msgListener({ type: 'SCAN_PAGE_TOTP' }, null, resolve));
     dom.window.close();
     return res;

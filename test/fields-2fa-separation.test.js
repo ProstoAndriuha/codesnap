@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -32,10 +33,10 @@ test('logged-in user email header on a Google Authenticator 2FA screen never cau
     runtime: { onMessage: { addListener() {} }, sendMessage: async () => { searches++; return { status: 'found', code: '123456' }; } },
     storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(searches, 0);
-  assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]'), null);
+  assert.equal(inlineChip(dom.window.document), null);
   dom.window.close();
 });
 
@@ -60,10 +61,10 @@ test('GitHub-style TOTP heading outside <form> and snake_case app_totp id classi
     runtime: { onMessage: { addListener() {} }, sendMessage: async () => { searches++; return { status: 'found', code: '123456' }; } },
     storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(searches, 0);
-  assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]'), null);
+  assert.equal(inlineChip(dom.window.document), null);
   dom.window.close();
 });
 
@@ -101,10 +102,10 @@ test('6-cell 2FA group with "Send verification code to email instead" button sta
     runtime: { onMessage: { addListener() {} }, sendMessage: async () => { searches++; return { status: 'found', code: '123456' }; } },
     storage: { local: { get: async () => ({ autoWatch: true }) }, onChanged: { addListener() {} } }
   };
-  dom.window.eval(contentSource);
+  evaluateContent(dom.window, contentSource);
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(searches, 0);
-  assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]'), null);
+  assert.equal(inlineChip(dom.window.document), null);
   dom.window.close();
 });
 

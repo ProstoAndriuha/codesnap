@@ -104,6 +104,27 @@ test('CodeSnapWebmail rejects yesterday/old messages and surfaces unread row hin
   yandexOld.dom.window.close();
 });
 
+test('Gmail and Yandex accept current full timestamps and reject old or undated mail', () => {
+  const now = new Date(2026, 10, 23, 10, 45).getTime();
+  const { dom, api } = loadWebmail(`
+    <a data-email="tester@example.test"></a>
+    <div role="region"><h2 class="hP">Verification</h2><span class="g3" title="Nov 23, 2026 at 10:44 AM"></span><div class="a3s">Demo OTP 483921</div></div>
+    <div role="region"><span class="g3" title="Nov 22, 2026 at 10:44 AM"></span><div class="a3s">Yesterday OTP 273018</div></div>
+  `, 'https://mail.google.com/mail/u/0/');
+  try {
+    const scan = api.scanDocument(dom.window.document, 'mail.google.com', now);
+    assert.equal(scan.accountEmail, 'tester@example.test');
+    assert.equal(scan.messages.length, 1);
+    assert.match(scan.messages[0].body, /483921/);
+    assert.equal(api.parseRelativeTimestamp('23 ноября 2026 г., 10:44', now), now - 60_000);
+    assert.equal(api.parseRelativeTimestamp('23.11.2026, 10:44', now), now - 60_000);
+    assert.equal(api.parseRelativeTimestamp('22 ноября 2026 г., 10:44', now), null);
+    assert.equal(api.parseRelativeTimestamp('', now), null);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('Fastmail JMAP local connector works without backend servers', async () => {
   const prior = { chrome: globalThis.chrome, fetch: globalThis.fetch };
   const stored = { localApiAccounts: [] };

@@ -123,7 +123,7 @@ export async function mountAuthenticatorView(container, options = {}) {
 
   leftBtns.append(importBtn, pinBtn, clockBtn, proBtn);
 
-  const title = document.createElement('div');
+  const title = document.createElement('h2');
   title.className = 'auth-bar-title';
   title.textContent = 'Аутентификатор';
 
@@ -161,7 +161,7 @@ export async function mountAuthenticatorView(container, options = {}) {
   editBtn.textContent = '✏';
 
   rightBtns.append(scanBtn, sniperBtn, pickBtn, addBtn, editBtn);
-  bar.append(leftBtns, title, rightBtns);
+  bar.append(title, leftBtns, rightBtns);
 
   // Search box
   const searchWrap = document.createElement('div');

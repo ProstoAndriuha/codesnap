@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $distRoot = Join-Path $sourceRoot 'dist'
@@ -20,7 +21,13 @@ $cleanJson = ($manifestObj | ConvertTo-Json -Depth 16) -replace "`r`n", "`n"
 $outputPath = Join-Path ([IO.Directory]::GetParent($sourceRoot).FullName) 'CodeSnap-ChromeWebStore.zip'
 $temporaryPath = "$outputPath.tmp"
 if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force }
-[IO.Compression.ZipFile]::CreateFromDirectory($stageRoot, $temporaryPath)
+$archive = [IO.Compression.ZipFile]::Open($temporaryPath, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($file in Get-ChildItem -LiteralPath $stageRoot -Recurse -File) {
+        $entryName = $file.FullName.Substring($stageRoot.Length + 1).Replace('\', '/')
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName) | Out-Null
+    }
+} finally { $archive.Dispose() }
 Remove-Item -LiteralPath $stageRoot -Recurse -Force
 
 $zip = [IO.Compression.ZipFile]::OpenRead($temporaryPath)

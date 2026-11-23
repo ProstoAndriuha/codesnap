@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip, importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -57,7 +58,7 @@ test('Item 2: Webmail MutationObserver pushes fresh code immediately to waiting 
   });
 
   try {
-    await import(`../src/background.js?push=${Math.random()}`);
+    await importBackground(`../src/background.js?push=${Math.random()}`);
     const sendBg = (req, sender) => new Promise(resolve => bgListener(req, sender, resolve));
 
     // Step 1: Website tab searches and enters waiting state (no code in webmail yet)
@@ -196,7 +197,7 @@ test('Item 3 & 5: Alt+Shift+V hotkey, context menu fallback, clipboard 45s auto-
   };
 
   try {
-    await import(`../src/background.js?hotkey=${Math.random()}`);
+    await importBackground(`../src/background.js?hotkey=${Math.random()}`);
 
     // 1) Hotkey Alt+Shift+V falls back to FORCE_INSERT_ACTIVE on an undetected active input
     await cmdListener('fill-verification-code');
@@ -260,10 +261,10 @@ test('Item 5 & 6: Live countdown expires inline code, mute hides/restores chip, 
   };
   try {
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource.replaceAll('if (!event.isTrusted) return;', '').replaceAll('if (event.isTrusted) void ', 'void '));
+    evaluateContent(dom.window, contentSource.replaceAll('if (!event.isTrusted) return;', '').replaceAll('if (event.isTrusted) void ', 'void '));
     await new Promise(r => setTimeout(r, 50));
 
-    const chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+    const chip = inlineChip(dom.window.document);
     assert.ok(chip);
     const panel = () => dom.window.document.querySelector('#codesnap-inline-panel')?.shadowRoot;
     assert.ok(panel().querySelector('.timer-badge'));
@@ -278,12 +279,12 @@ test('Item 5 & 6: Live countdown expires inline code, mute hides/restores chip, 
     panel().querySelector('.panel-mute-btn').click();
     await new Promise(r => setTimeout(r, 40));
     assert.deepEqual([...store.mutedOrigins], ['https://shop.example']);
-    assert.equal(dom.window.document.querySelector('button[aria-label="Find verification code"]'), null);
+    assert.equal(inlineChip(dom.window.document), null);
 
     // Unmute via storage listener -> chip comes back
     store.mutedOrigins = [];
     settingsListener({ mutedOrigins: { newValue: [] } }, 'local');
-    assert.ok(dom.window.document.querySelector('button[aria-label="Find verification code"]'));
+    assert.ok(inlineChip(dom.window.document));
   } finally {
     dom.window.close();
   }

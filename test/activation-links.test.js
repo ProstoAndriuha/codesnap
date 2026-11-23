@@ -1,3 +1,4 @@
+import { importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -116,7 +117,7 @@ test('background OPEN_LINK_POPUP opens validated HTTPS activation links on click
     };
   };
   try {
-    await import(`../src/background.js?links=${Math.random()}`);
+    await importBackground(`../src/background.js?links=${Math.random()}`);
     const send = (req, sender = {}) => new Promise(resolve => listener(req, sender, resolve));
     const found = await send({ type: 'SEARCH_POPUP', tabId: 5, origin: 'https://example.com', siteId: 'generic', fieldId: 'prompt-1', siteContext: { prefer: 'link', hasCodeField: false } });
     assert.equal(found.status, 'found');

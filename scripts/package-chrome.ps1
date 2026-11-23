@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $distRoot = Join-Path $sourceRoot 'dist'
@@ -8,7 +9,13 @@ if ($manifest.version -ne $sourceManifest.version) { throw 'Run npm run build be
 $outputPath = Join-Path ([IO.Directory]::GetParent($sourceRoot).FullName) 'CodeSnap-Chrome.zip'
 $temporaryPath = "$outputPath.tmp"
 if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath }
-[IO.Compression.ZipFile]::CreateFromDirectory($distRoot, $temporaryPath)
+$archive = [IO.Compression.ZipFile]::Open($temporaryPath, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($file in Get-ChildItem -LiteralPath $distRoot -Recurse -File) {
+        $entryName = $file.FullName.Substring($distRoot.Length + 1).Replace('\', '/')
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName) | Out-Null
+    }
+} finally { $archive.Dispose() }
 $zip = [IO.Compression.ZipFile]::OpenRead($temporaryPath)
 try {
     if (-not $zip.GetEntry('manifest.json')) { throw 'Manifest must be at archive root.' }

@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip, importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -119,7 +120,7 @@ test('Feature #1 Smart Grace Wait returns immediately above 3s and waits for fre
       }
     };
     await addTotpAccount(`otpauth://totp/BloFin:user@test.com?secret=${SAMPLE_SECRET}&issuer=BloFin`);
-    await import(`../src/background.js?grace=${Math.random()}`);
+    await importBackground(`../src/background.js?grace=${Math.random()}`);
 
     const hintId = mockStorage.localData.totpSiteHints[0].id;
     let mockNow = 29_200;
@@ -203,7 +204,7 @@ test('Feature #5 Phishing Guard detects visual/IDN/typosquat/bait clones, blocks
 
   try {
     await addTotpAccount(`otpauth://totp/BloFin:user@blofin.com?secret=${SAMPLE_SECRET}&issuer=BloFin`);
-    await import(`../src/background.js?phish=${Math.random()}`);
+    await importBackground(`../src/background.js?phish=${Math.random()}`);
 
     // Vault lookup on clone site must return 'none'
     const cloneLookup = await getTotpCandidatesForSite('https://bl0fin.com');
@@ -235,11 +236,11 @@ test('Feature #5 Phishing Guard detects visual/IDN/typosquat/bait clones, blocks
         }
       };
       dom.window.eval(fieldsSource);
-      dom.window.eval(contentSource);
+      evaluateContent(dom.window, contentSource);
 
       let chip;
       for (let i = 0; i < 30; i++) {
-        chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+        chip = inlineChip(dom.window.document);
         if (chip?.textContent === '⚠️ Фишинг?') break;
         await new Promise(r => setTimeout(r, 25));
       }
@@ -333,7 +334,7 @@ test('Feature #6 QR Region Sniper crops & decodes embedded QR and saves via BEGI
     };
     dom.window.document.querySelector('svg').getBoundingClientRect = () => ({ left: 100, top: 80, right: 248, bottom: 228, width: 148, height: 148 });
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource.replaceAll('!e.isTrusted || ', ''));
 
     await new Promise(resolve => contentListener({ type: 'BEGIN_QR_SNIPER' }, null, resolve));
     const overlay = dom.window.document.querySelector('#codesnap-sniper-overlay');
@@ -378,7 +379,7 @@ test('Feature #7 Manual Field Picker captures exotic field, persists custom sele
       runtime: { onMessage: { addListener(fn) { contentListener = fn; } }, sendMessage: async () => ({ status: 'none' }) }
     };
     dom.window.eval(fieldsSource);
-    dom.window.eval(contentSource);
+    evaluateContent(dom.window, contentSource.replaceAll('!e.isTrusted || ', ''));
 
     // Before picking: standard heuristics must NOT recognize non-OTP text input
     const before = await new Promise(resolve => contentListener({ type: 'FIELD_STATUS' }, null, resolve));
@@ -409,7 +410,7 @@ test('Feature #7 Manual Field Picker captures exotic field, persists custom sele
       runtime: { onMessage: { addListener(fn) { reloadListener = fn; } }, sendMessage: async () => ({ status: 'none' }) }
     };
     reloadDom.window.eval(fieldsSource);
-    reloadDom.window.eval(contentSource);
+    evaluateContent(reloadDom.window, contentSource);
     await new Promise(r => setTimeout(r, 25));
 
     const after = await new Promise(resolve => reloadListener({ type: 'FIELD_STATUS' }, null, resolve));

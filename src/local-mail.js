@@ -54,8 +54,10 @@ async function discoverOpenWebmailTabs() {
   let tabs = [];
   try { tabs = await chrome.tabs.query({}); } catch { return []; }
   const found = new Map();
+  const tabsById = new Map(tabs.map(tab => [tab.id, tab]));
   for (const [key, entry] of registeredTabs) {
-    found.set(key, { ...entry });
+    const tab = tabsById.get(entry.tabId);
+    if (tab && (!tab.url || detectWebmailProviderFromUrl(tab.url) === entry.provider)) found.set(key, { ...entry });
   }
   for (const tab of tabs) {
     if (!Number.isInteger(tab?.id) || !tab.url) continue;
@@ -100,13 +102,14 @@ export async function listLocalMailAccounts() {
       });
     }
     for (const provider of Array.isArray(enabledMailProviders) ? enabledMailProviders : []) {
-      if (!LOCAL_MAIL_PROVIDERS[provider] || activeProviders.has(provider)) continue;
+      if (!LOCAL_MAIL_PROVIDERS[provider]) continue;
+      const active = activeProviders.has(provider);
       accounts.push({
         id: `pin:${provider}`,
         kind: 'pinned',
         provider,
-        email: `${LOCAL_MAIL_PROVIDERS[provider].name} (откройте вкладку)`,
-        active: false
+        email: `${LOCAL_MAIL_PROVIDERS[provider].name} ${active ? '(любая открытая вкладка)' : '(откройте вкладку)'}`,
+        active
       });
     }
   }
@@ -139,14 +142,16 @@ async function fetchFastmailMessages(account, maxAgeSeconds = SEARCH_WINDOW_SECO
   if (sessionRes.status === 401) throw new Error('LOCAL_API_AUTH');
   if (!sessionRes.ok) throw new Error('LOCAL_API_UNAVAILABLE');
   const session = await sessionRes.json();
-  const apiUrl = session.apiUrl || 'https://api.fastmail.com/jmap/api/';
+  const apiUrl = new URL(session.apiUrl || 'https://api.fastmail.com/jmap/api/');
+  if (!['https://api.fastmail.com', 'https://jmap.fastmail.com'].includes(apiUrl.origin)) throw new Error('LOCAL_API_UNAVAILABLE');
   const accountId = session.primaryAccounts?.['urn:ietf:params:jmap:mail'];
   if (!accountId) throw new Error('LOCAL_API_UNAVAILABLE');
   const afterIso = new Date(Date.now() - (maxAgeSeconds + 60) * 1000).toISOString();
-  const jmapRes = await fetch(apiUrl, {
+  const jmapRes = await fetch(apiUrl.href, {
     method: 'POST',
     headers: { Authorization: `Bearer ${account.token}`, 'Content-Type': 'application/json' },
     cache: 'no-store',
+    redirect: 'error',
     body: JSON.stringify({
       using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
       methodCalls: [
@@ -262,7 +267,7 @@ export async function scanLocalMail({ selected = 'all', excludeTabId = null, max
     const settled = await Promise.allSettled(filtered.map(async target => {
       if (typeof chrome.tabs?.sendMessage !== 'function') return null;
       const response = await sendWithTimeout(target.tabId, target.frameId ?? 0, { type: 'SCAN_WEBMAIL' });
-      if (!response?.ok) return null;
+      if (!response?.ok || response.provider !== target.provider) return null;
       if (response.accountEmail) {
         registerWebmailTab({ tabId: target.tabId, frameId: target.frameId ?? 0, provider: target.provider, accountEmail: response.accountEmail });
       }
@@ -275,6 +280,7 @@ export async function scanLocalMail({ selected = 'all', excludeTabId = null, max
       for (const msg of response.messages ?? []) {
         messages.push({
           ...msg,
+          id: `${target.tabId}:${target.frameId}:${msg.id}`,
           accountProvider: msg.accountProvider || target.provider,
           accountEmail: msg.accountEmail || response.accountEmail || null,
           localSource: 'webmail',
@@ -326,7 +332,7 @@ export async function connectLocalProvider({ provider, apiToken = '', clientId =
   if (provider === 'fastmail_jmap') {
     const token = String(apiToken ?? '').trim();
     if (!token) throw new Error('LOCAL_API_CONFIG');
-    await ensureHostPermission(['https://api.fastmail.com/*']);
+    await ensureHostPermission(['https://api.fastmail.com/*', 'https://jmap.fastmail.com/*']);
     const res = await fetch('https://api.fastmail.com/jmap/session', {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store'

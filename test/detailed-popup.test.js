@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -22,7 +23,7 @@ async function setup(detailedPopup, result) {
   };
   window.eval(fields);
   // Only the test harness removes the browser trusted-click restriction.
-  window.eval(content.replaceAll('if (!event.isTrusted) return;', '').replaceAll('if (event.isTrusted) void insertDetailed', 'void insertDetailed'));
+  evaluateContent(window, content.replaceAll('if (!event.isTrusted) return;', '').replaceAll('if (event.isTrusted) void insertDetailed', 'void insertDetailed'));
   await wait();
   return { dom, calls, settingsListener, messageListener, panel: () => window.document.querySelector('#codesnap-inline-panel')?.shadowRoot };
 }
@@ -47,7 +48,7 @@ test('detailed Fill inserts actual values through the existing field-bound sessi
   await wait();
   assert.equal(app.dom.window.document.querySelector('input').value, '657931');
   assert.equal(app.panel(), undefined);
-  assert.equal(app.dom.window.document.querySelector('[aria-label="Find verification code"]').textContent, '✓');
+  assert.equal(inlineChip(app.dom.window.document).textContent, '✓');
   app.dom.window.close();
 });
 

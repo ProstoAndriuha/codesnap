@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "__MSG_appName__",
-  "version": "1.4.0",
+  "version": "1.4.1",
+  "minimum_chrome_version": "137",
   "description": "__MSG_appDescription__",
   "default_locale": "en",
   "permissions": [
@@ -27,6 +28,7 @@
   ],
   "optional_host_permissions": [
     "https://api.fastmail.com/*",
+    "https://jmap.fastmail.com/*",
     "https://graph.microsoft.com/*",
     "https://login.microsoftonline.com/*"
   ],

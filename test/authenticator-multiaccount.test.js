@@ -1,3 +1,4 @@
+import { evaluateContent, inlineChip, importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -303,7 +304,7 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
   try {
     await addTotpAccount(`otpauth://totp/Okex:OKEx.com--tomaandreioff@gmail.com?secret=${SAMPLE_SECRETS.okx1}&issuer=Okex`);
     await addTotpAccount(`otpauth://totp/Okex:OKEx.com--tomaandreiw@gmail.com?secret=${SAMPLE_SECRETS.okx2}&issuer=Okex`);
-    await import(`../src/background.js?multi=${Math.random()}`);
+    await importBackground(`../src/background.js?multi=${Math.random()}`);
 
     // Scenario A: Ambiguous OKX 2FA page shows 🔐 2FA (2) chip and opens chooser with both email accounts
     const ambigDom = new JSDOM(`
@@ -329,11 +330,11 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
       };
 
       ambigDom.window.eval(fieldsSource);
-      ambigDom.window.eval(contentSource);
+      evaluateContent(ambigDom.window, contentSource);
 
       let chip;
       for (let i = 0; i < 30; i++) {
-        chip = ambigDom.window.document.querySelector('button[aria-label="Find verification code"]');
+        chip = inlineChip(ambigDom.window.document);
         if (chip?.textContent === '🔐 2FA (2)') break;
         await new Promise(r => setTimeout(r, 25));
       }
@@ -357,8 +358,8 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
       pickBtns[1].click();
 
       const totpInput = ambigDom.window.document.querySelector('#totp');
-      for (let i = 0; i < 25; i++) {
-        if (totpInput.value) break;
+      const deadline = Date.now() + 5_000;
+      while (!totpInput.value && Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 25));
       }
       const afterGen = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx2 }, Date.now())).code;
@@ -388,7 +389,7 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
         }
       };
       loginDom.window.eval(fieldsSource);
-      loginDom.window.eval(contentSource);
+      evaluateContent(loginDom.window, contentSource);
 
       const emailInput = loginDom.window.document.querySelector('#email');
       emailInput.value = 'tomaandreiw@gmail.com';
@@ -423,13 +424,13 @@ test('inline OKX multi-account flow shows 🔐 2FA (2) chooser and auto-selects 
       };
 
       verifyDom.window.eval(fieldsSource);
-      verifyDom.window.eval(contentSource);
+      evaluateContent(verifyDom.window, contentSource);
 
       const beforeExpected = (await generateTotpCode({ secret: SAMPLE_SECRETS.okx2 }, Date.now())).code;
       const chipLiveRe = /^(?:\d{6}\s·\s\d+s|⏳\s*\d+s\s→\sновый)$/;
       let autoChip;
       for (let i = 0; i < 30; i++) {
-        autoChip = verifyDom.window.document.querySelector('button[aria-label="Find verification code"]');
+        autoChip = inlineChip(verifyDom.window.document);
         if (autoChip && chipLiveRe.test(autoChip.textContent ?? '')) break;
         await new Promise(r => setTimeout(r, 25));
       }
@@ -544,7 +545,7 @@ test('BloFin SPA 6-box, maxlength="6" and aria-hidden overlay 2FA forms detect a
 
   try {
     await addTotpAccount(`otpauth://totp/BloFin:user@blofin.example?secret=${SAMPLE_SECRETS.okx1}&issuer=BloFin`);
-    await import(`../src/background.js?blofin=${Math.random()}`);
+    await importBackground(`../src/background.js?blofin=${Math.random()}`);
 
     const layouts = [
       {
@@ -637,11 +638,11 @@ test('BloFin SPA 6-box, maxlength="6" and aria-hidden overlay 2FA forms detect a
         assert.ok(detected, `${layout.name}: expected VerificationFields.detect to find 2FA field`);
         assert.equal(detected.channel, 'authenticator', `${layout.name}: expected channel=authenticator`);
 
-        dom.window.eval(contentSource);
+        evaluateContent(dom.window, contentSource);
         const liveChipRe = /^(?:\d{6}\s·\s\d+s|⏳\s*\d+s\s→\sновый)$/;
         let chip;
         for (let i = 0; i < 30; i++) {
-          chip = dom.window.document.querySelector('button[aria-label="Find verification code"]');
+          chip = inlineChip(dom.window.document);
           if (chip && liveChipRe.test(chip.textContent ?? '')) break;
           await new Promise(r => setTimeout(r, 25));
         }

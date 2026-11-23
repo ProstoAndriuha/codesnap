@@ -1,3 +1,4 @@
+import { importBackground } from './content-harness.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -27,7 +28,7 @@ test('iframe insertion is routed only to the frame that requested the code', asy
     return { ok: true, status: 200, json: async () => data };
   };
   try {
-    await import(`../src/background.js?frame=${Math.random()}`);
+    await importBackground(`../src/background.js?frame=${Math.random()}`);
     const send = (request, sender) => new Promise(resolve => listener(request, sender, resolve));
     const sender = { tab: { id: 8 }, frameId: 4, url: 'https://auth.example.com/login' };
     const found = await send({ type: 'SEARCH_INLINE', origin: 'https://auth.example.com', fieldId: 'email-otp', channel: 'email', detectedAt: Date.now() - 1000 }, sender);
@@ -60,7 +61,7 @@ test('inline email choice is scoped to its iframe and rejects foreign origins', 
       { id, internalDate: String(now), payload: { headers: [{ name: 'From', value: 'codes@example.com' }, { name: 'Subject', value: 'Example code' }], mimeType: 'text/plain', body: { data: Buffer.from(`Your verification code is ${id === 'mail-1' ? '483921' : '275521'}`).toString('base64url') } } } };
   };
   try {
-    await import(`../src/background.js?choice=${Math.random()}`);
+    await importBackground(`../src/background.js?choice=${Math.random()}`);
     const send = (request, sender) => new Promise(resolve => listener(request, sender, resolve));
     const sender = { tab: { id: 8 }, frameId: 4, url: 'https://auth.example.com/login' };
     const result = await send({ type: 'SEARCH_INLINE', origin: 'https://auth.example.com', fieldId: 'email-otp', channel: 'email', detectedAt: now - 1000 }, sender);
@@ -104,7 +105,7 @@ test('generic Gmail search and insertion stay isolated by tab and field', async 
     return { ok: true, status: 200, json: async () => id === 'messages' ? { messages: [{ id: 'a' }, { id: 'b' }] } : messages[id] };
   };
   try {
-    await import(`../src/background.js?test=${Math.random()}`);
+    await importBackground(`../src/background.js?test=${Math.random()}`);
     const send = request => new Promise(resolve => listener(request, {}, resolve));
     const a = await send({ type: 'SEARCH_POPUP', tabId: 1, origin: 'https://example.com', siteId: 'generic', fieldId: 'field-a', detectedAt: now - 2000, siteContext: { title: 'Example' } });
     const b = await send({ type: 'SEARCH_POPUP', tabId: 2, origin: 'https://other.test', siteId: 'generic', fieldId: 'field-b', detectedAt: now - 2000, siteContext: { title: 'Other' } });
@@ -146,7 +147,7 @@ test('automatic watch finds a provider code when Chrome hides the tab URL; popup
     return { ok: true, status: 200, json: async () => message };
   };
   try {
-    await import(`../src/background.js?provider=${Math.random()}`);
+    await importBackground(`../src/background.js?provider=${Math.random()}`);
     const request = { tabId: 3, origin: 'https://www.alphax.com', siteId: 'generic', fieldId: 'six-cells' };
     const automatic = await new Promise(resolve => listener({ type: 'SEARCH_INLINE', origin: request.origin, fieldId: request.fieldId, automatic: true }, { tab: { id: 3 }, url: 'https://www.alphax.com/en-us/login' }, resolve));
     assert.equal(automatic.status, 'review');
@@ -192,7 +193,7 @@ test('automatic watch falls back to recent mail for an unknown site and generic 
     return { ok: true, status: 200, json: async () => ({ id: 'bitbase-login', internalDate: String(Date.now() - 1000), payload: { headers: [{ name: 'From', value: 'Bitbase <no-reply@mail.bitbase.com>' }, { name: 'Subject', value: 'Login' }], mimeType: 'text/plain', body: { data: Buffer.from('Dear Bitbase user: Your email verification code for login is 360069. Verification code is valid for 5 minutes.').toString('base64url') } } }) };
   };
   try {
-    await import(`../src/background.js?bitbase=${Math.random()}`);
+    await importBackground(`../src/background.js?bitbase=${Math.random()}`);
     const result = await new Promise(resolve => listener({ type: 'SEARCH_INLINE', origin: 'https://www.bitbase.com', fieldId: 'email-code', automatic: true, channel: 'email' }, { tab: { id: 7 }, url: 'https://www.bitbase.com/verify' }, resolve));
     assert.equal(result.status, 'found');
     assert.equal(result.code, '360069');

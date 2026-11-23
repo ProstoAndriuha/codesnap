@@ -1,3 +1,3 @@
-Privacy policy: https://prostoandriuha.github.io/codesnap/privacy.html
+Privacy policy: https://codesnap.fundingbotsecret.pp.ua/privacy.html
 
 The published HTML source is in docs/privacy.html.

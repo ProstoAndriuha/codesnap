@@ -40,6 +40,12 @@ import {
 import { decodeCroppedQrDataUrl, classifyQrStringsForTotp } from './qr-scanner.js';
 import { getProStatus, activateProLicense, deactivateProLicense, FREE_TOTP_LIMIT } from './license.js';
 
+const protectLocalStorage = chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+const contentSettingsKeys = [
+  'autoWatch', 'detailedPopup', 'showWithdrawalDetails', 'totpTimeOffsetSeconds', 'totpEnabled',
+  'totpSiteHints', 'mutedOrigins', 'phishingTrustedOrigins', 'customFieldSelectors', 'localWebmailEnabled'
+];
+
 let hintsRefreshed = false;
 async function ensureTotpHintsFresh() {
   if (hintsRefreshed) return;
@@ -394,7 +400,7 @@ async function insertDual({ tabId, frameId = 0, origin, sessionId, siteContext =
 
 async function handleWebmailPush(request, sender) {
   if (!sender.tab?.id) return { status: 'ignored' };
-  const senderProvider = detectWebmailProviderFromUrl(sender.url || '') || detectWebmailProviderFromUrl(sender.tab?.url || '');
+  const senderProvider = detectWebmailProviderFromUrl(sender.url || '');
   if (!senderProvider || senderProvider !== request.provider) return { status: 'ignored' };
   registerWebmailTab({ tabId: sender.tab.id, frameId: sender.frameId ?? 0, provider: request.provider, accountEmail: request.accountEmail });
   if (!request.messages?.length && !request.unreadHints?.length) return { status: 'ok' };
@@ -418,6 +424,7 @@ async function handleWebmailPush(request, sender) {
 
     const normalized = (request.messages ?? []).map(msg => ({
       ...msg,
+      id: `${sender.tab.id}:${sender.frameId ?? 0}:${msg.id}`,
       accountProvider: msg.accountProvider || request.provider,
       accountEmail: msg.accountEmail || request.accountEmail || null,
       localSource: 'webmail',
@@ -630,6 +637,30 @@ async function selectCandidate({ tabId, frameId = 0, origin, sessionId, index })
 
 chrome.runtime.onMessage.addListener((request, sender, respond) => {
   (async () => {
+    await protectLocalStorage;
+    const pageOrigin = sender.tab?.id != null ? originOf(sender.url) : null;
+    if (pageOrigin?.startsWith('https://')) {
+      if (request.type === 'GET_WEBMAIL_ENABLED') {
+        return { enabled: Boolean(detectWebmailProviderFromUrl(sender.url)) && await isLocalWebmailEnabled() };
+      }
+      if (request.type === 'GET_CONTENT_SETTINGS') {
+        return chrome.storage.local.get(contentSettingsKeys);
+      }
+      if (request.type === 'MUTE_CONTENT_ORIGIN') {
+        const { mutedOrigins = [] } = await chrome.storage.local.get('mutedOrigins');
+        await chrome.storage.local.set({ mutedOrigins: [...new Set([...mutedOrigins, pageOrigin])] });
+        return { status: 'ok' };
+      }
+      if (request.type === 'SAVE_CONTENT_FIELD') {
+        const { descriptor } = request;
+        if (!['email', 'authenticator'].includes(descriptor?.channel)) return { status: 'error' };
+        const { customFieldSelectors = {} } = await chrome.storage.local.get('customFieldSelectors');
+        await chrome.storage.local.set({ customFieldSelectors: {
+          ...customFieldSelectors, [pageOrigin]: { ...descriptor, updatedAt: Date.now() }
+        } });
+        return { status: 'ok' };
+      }
+    }
     if (request.type === 'WEBMAIL_READY' || request.type === 'WEBMAIL_PUSH') {
       return handleWebmailPush(request, sender);
     }
@@ -786,11 +817,13 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     if (request.type === 'FINISH_QR_SNIPER') {
       if (!sender.tab?.id || !request.origin?.startsWith('https://')) return { status: 'untrusted', message: 'Invalid page.' };
       if (sender.url && originOf(sender.url) !== request.origin) return { status: 'untrusted', message: 'Invalid origin.' };
-      let shot = null;
-      if (typeof chrome.tabs?.captureVisibleTab === 'function') {
-        try { shot = await chrome.tabs.captureVisibleTab(sender.tab.windowId ?? null, { format: 'png' }); }
-        catch { try { shot = await chrome.tabs.captureVisibleTab({ format: 'png' }); } catch { shot = null; } }
+      const [active] = await chrome.tabs.query({ active: true, windowId: sender.tab.windowId });
+      if (active?.id !== sender.tab.id || sender.frameId !== 0 || (active.url && originOf(active.url) !== request.origin)) {
+        return { status: 'changed', message: 'The verification page changed.' };
       }
+      const shot = await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'png' }).catch(() => null);
+      const [stillActive] = await chrome.tabs.query({ active: true, windowId: sender.tab.windowId });
+      if (stillActive?.id !== active.id || stillActive.url !== active.url) return { status: 'changed' };
       const host = new URL(request.origin).hostname.replace(/^www\./, '');
       const decoded = new Set();
       if (shot) {
@@ -799,7 +832,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       let classified = classifyQrStringsForTotp([...decoded], { issuer: host, domain: host });
       if (classified.status !== 'found' && Array.isArray(request.regionVisualUrls)) {
         const domDecoded = [];
-        for (const vUrl of request.regionVisualUrls) {
+        for (const vUrl of request.regionVisualUrls.slice(0, 6)) {
+          if (typeof vUrl !== 'string' || !vUrl.startsWith('data:image/')) continue;
           domDecoded.push(...await decodeCroppedQrDataUrl(vUrl, null));
         }
         classified = classifyQrStringsForTotp(domDecoded, { issuer: host, domain: host });
@@ -819,9 +853,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
           period: item.period
         }));
       }
-      const first = added[0];
-      await notifyInlineToast(sender.tab.id, sender.frameId ?? 0, `✓ 2FA добавлен: ${first.account.issuer} (${first.code})`);
-      return { status: 'ok', count: added.length, first };
+      await notifyInlineToast(sender.tab.id, sender.frameId ?? 0, '✓ Ключ 2FA добавлен');
+      return { status: 'ok', count: added.length };
     }
     if (request.type === 'START_FIELD_PICKER') {
       const isExtPage = sender.url?.startsWith(`chrome-extension://${chrome.runtime?.id}/src/`) || (!sender.tab && !sender.url);
@@ -942,6 +975,23 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     return { status: 'error', message: 'Unknown request.' };
   })().then(respond, () => respond({ status: 'error', message: 'Request failed.' }));
   return true;
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  const publicChanges = {};
+  if (area === 'local') {
+    for (const key of contentSettingsKeys) {
+      if (changes[key]) publicChanges[key] = { newValue: changes[key].newValue };
+    }
+    if (changes.primaryEmail) publicChanges.primaryEmail = {};
+  }
+  if (area === 'session' && changes.extraAccounts) publicChanges.extraAccounts = {};
+  if (!Object.keys(publicChanges).length) return;
+  void chrome.tabs.query({}).then(tabs => {
+    for (const { id } of tabs) {
+      void chrome.tabs.sendMessage(id, { type: 'CONTENT_SETTINGS_CHANGED', area, changes: publicChanges }).catch(() => {});
+    }
+  }).catch(() => {});
 });
 
 async function copyViaOffscreen(text) {

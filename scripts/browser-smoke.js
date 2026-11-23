@@ -7,18 +7,62 @@ const workspaceWork = resolve('..', '..', 'work');
 mkdirSync(workspaceWork, { recursive: true });
 const profile = mkdtempSync(join(workspaceWork, 'vc-chrome-'));
 const context = await chromium.launchPersistentContext(profile, {
-  channel: process.env.PLAYWRIGHT_CHANNEL ?? 'chromium', headless: true,
+  ...(process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : { channel: process.env.PLAYWRIGHT_CHANNEL ?? 'chromium' }),
+  headless: true,
   args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
 });
+
+async function privateControl(page, hostId, text = null) {
+  const client = await context.newCDPSession(page);
+  try {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const { root } = await client.send('DOM.getDocument', { depth: -1, pierce: true });
+      const find = (node, predicate) => predicate(node) ? node :
+        [...(node.children || []), ...(node.shadowRoots || [])].map(child => find(child, predicate)).find(Boolean);
+      const host = find(root, node => node.attributes?.some((attr, index) => index % 2 === 0 && attr === 'id' && node.attributes[index + 1] === hostId));
+      const control = host && find(host, node => node.nodeName === 'BUTTON' && (!text || find(node, child => child.nodeValue?.includes(text))));
+      if (control) {
+        const { model } = await client.send('DOM.getBoxModel', { nodeId: control.nodeId });
+        const [left, top, , , right, bottom] = model.border;
+        return { click: () => page.mouse.click((left + right) / 2, (top + bottom) / 2) };
+      }
+      await new Promise(resolve => setTimeout(resolve, 80));
+    }
+    throw new Error(`Expected private CodeSnap control ${hostId}${text ? ` with text ${text}` : ''}`);
+  } finally {
+    await client.detach();
+  }
+}
+
+async function assertToolbarFits(page) {
+  for (const width of [300, 366, 396]) {
+    await page.setViewportSize({ width, height: 640 });
+    const result = await page.locator('.auth-bar').evaluate(bar => {
+      const box = bar.getBoundingClientRect();
+      const buttons = [...bar.querySelectorAll('button')];
+      return {
+        count: buttons.length,
+        clipped: document.documentElement.scrollWidth > innerWidth || buttons.some(button => {
+          const rect = button.getBoundingClientRect();
+          return rect.left < box.left || rect.right > box.right || rect.bottom > box.bottom;
+        })
+      };
+    });
+    if (result.count !== 9 || result.clipped) throw new Error(`Authenticator toolbar overflow at ${width}px`);
+  }
+}
+
 try {
   const page = await context.newPage();
+  await page.route('https://example.com/', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>CodeSnap smoke</title><body></body>' }));
   await page.goto('https://example.com', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => { document.body.innerHTML = '<label for="email-code">Email verification code</label><input id="email-code" maxlength="6">'; });
   console.log('Chrome diagnostic:', { workers: context.serviceWorkers().map(worker => worker.url()), url: page.url() });
   const extensionId = new URL(context.serviceWorkers()[0].url()).hostname;
   const websiteTabId = await context.serviceWorkers()[0].evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0].id);
   if (process.env.EXPECTED_EXTENSION_ID && extensionId !== process.env.EXPECTED_EXTENSION_ID) throw new Error(`Unexpected extension ID: ${extensionId}`);
-  await page.locator('button[aria-label="Find verification code"]').waitFor({ timeout: 5000 });
+  await page.locator('#codesnap-inline-chip').waitFor({ state: 'attached' });
   const status = await context.serviceWorkers()[0].evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     return chrome.tabs.sendMessage(tab.id, { type: 'FIELD_STATUS' });
@@ -30,9 +74,9 @@ try {
   }, { fieldId: status.fieldId });
   if (inserted.status !== 'inserted' || await page.locator('#email-code').inputValue() !== '483921') throw new Error('One-click insertion did not reach the email field');
   await page.evaluate(() => { document.body.innerHTML = '<label for="app-code">Google Authenticator 2FA code</label><input id="app-code" maxlength="6">'; });
-  await page.locator('button[aria-label="Find verification code"]').waitFor({ state: 'detached', timeout: 5000 });
+  await page.locator('#codesnap-inline-chip').waitFor({ state: 'detached', timeout: 5000 });
   await page.evaluate(() => { document.body.innerHTML = '<div class="content-top"><h2>Email verification</h2><p>Check your email for a code</p><div class="verify-code-form"><div class="cells">' + '<input type="tel">'.repeat(6) + '</div></div></div>'; });
-  await page.locator('button[aria-label="Find verification code"]').waitFor({ timeout: 5000 });
+  await page.locator('#codesnap-inline-chip').waitFor({ state: 'attached' });
   const groupStatus = await context.serviceWorkers()[0].evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     return chrome.tabs.sendMessage(tab.id, { type: 'FIELD_STATUS' });
@@ -66,8 +110,7 @@ try {
   }, { fieldId: groupStatus.fieldId });
   if (focusedInsert.status !== 'inserted' || await page.evaluate(() => window.__otpState.join('')) !== '310683') throw new Error('Focus-indexed OTP state lost or shifted digits');
   await page.evaluate(() => { document.body.innerHTML = '<div id="widget"></div>'; document.querySelector('#widget').attachShadow({ mode: 'open' }).innerHTML = '<label for="code">Email verification code</label><input id="code" maxlength="6">'; });
-  const shadowChip = page.locator('button[aria-label="Find verification code"]');
-  await shadowChip.waitFor({ timeout: 5000 });
+  await page.locator('#codesnap-inline-chip').waitFor({ state: 'attached' });
   const shadowStatus = await context.serviceWorkers()[0].evaluate(async () => { const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); return chrome.tabs.sendMessage(tab.id, { type: 'FIELD_STATUS' }); });
   if (!shadowStatus.detected || shadowStatus.channel !== 'email') throw new Error('Open shadow-root field not detected');
   await context.serviceWorkers()[0].evaluate(() => {
@@ -86,10 +129,13 @@ try {
   });
   await context.serviceWorkers()[0].evaluate(async () => chrome.storage.local.set({ primaryEmail: 'test@gmail.com' }));
   await page.evaluate(() => { document.body.innerHTML = '<label for="provider-code">Email verification code</label><input id="provider-code" maxlength="6">'; });
-  await page.locator('button[aria-label="Find verification code"]').getByText('Review').waitFor({ timeout: 10000 });
-  await page.locator('button[aria-label="Find verification code"]').click();
-  await page.locator('#codesnap-inline-panel').getByText('codes@mailer.test').waitFor();
-  await page.locator('#codesnap-inline-panel').getByText('483921').click();
+  await (await privateControl(page, 'codesnap-inline-chip', 'Review')).click();
+  const exposed = await page.evaluate(() => ['codesnap-inline-chip', 'codesnap-inline-panel'].some(id => {
+    const host = document.getElementById(id);
+    return !host || host.shadowRoot !== null || host.textContent.length > 0;
+  }));
+  if (exposed) throw new Error('Inline CodeSnap content is visible through the page DOM');
+  await (await privateControl(page, 'codesnap-inline-panel', '483921')).click();
   await page.waitForFunction(() => document.querySelector('#provider-code')?.value === '483921', null, { timeout: 5000 }).catch(async () => {
     throw new Error(`Inline provider code did not insert with a hidden tab URL: ${await page.locator('#codesnap-inline-panel').textContent().catch(() => 'panel closed')}`);
   });
@@ -136,10 +182,54 @@ try {
   const bitbase = await context.newPage();
   await bitbase.route('https://www.bitbase.com/verify', route => route.fulfill({ contentType: 'text/html', body: '<h1>Security Verification</h1><label for="auth">Google Authenticator code</label><input id="auth" placeholder="Enter Google Authenticator code"><label for="email">Email verification code</label><input id="email" placeholder="Enter email verification code">' }));
   await bitbase.goto('https://www.bitbase.com/verify');
-  await bitbase.locator('button[aria-label="Find verification code"]').getByText('360069').waitFor({ timeout: 10000 });
-  await bitbase.locator('button[aria-label="Find verification code"]').click();
+  await (await privateControl(bitbase, 'codesnap-inline-chip', '360069')).click();
   await bitbase.waitForFunction(() => document.querySelector('#email')?.value === '360069', null, { timeout: 5000 });
   if (await bitbase.locator('#auth').inputValue()) throw new Error('Email code was inserted into the authenticator field');
+
+  // Exercise real extension messaging and mail parsing with isolated fixture tabs.
+  const paths = [
+    { provider: 'gmail', url: 'https://mail.google.com/mail/u/0/', code: '478201' },
+    { provider: 'yandex', url: 'https://mail.yandex.ru/', code: '581496' }
+  ];
+  await context.serviceWorkers()[0].evaluate(async () => {
+    chrome.identity.getAuthToken = async () => { throw new Error('No Gmail API account for this test'); };
+    await chrome.storage.local.set({ enabledMailProviders: ['gmail', 'yandex'], securitySmokeMarker: 'fixture-only' });
+  });
+  for (const { provider, url, code } of paths) {
+    const mailbox = await context.newPage();
+    const stamp = new Date().toISOString();
+    const body = provider === 'gmail'
+      ? `<h2 class="hP">Example verification code</h2><span class="gD" email="codes@example.com"></span><time class="g3" datetime="${stamp}"></time><div class="a3s">Your Example verification code is ${code}.</div>`
+      : `<div class="mail-MessageSnippet is-unread"><span class="mail-MessageSnippet-FromText">codes@example.com</span><span class="mail-MessageSnippet-Item_subject">Example verification code</span><span class="mail-MessageSnippet-Item_firstline">Your Example verification code is ${code}.</span><time class="mail-MessageSnippet-Item_date" datetime="${stamp}"></time></div>`;
+    await mailbox.route(url, route => route.fulfill({ contentType: 'text/html', body }));
+    await mailbox.goto(url);
+    await context.serviceWorkers()[0].evaluate(async provider => {
+      await chrome.storage.local.set({ accountSelections: { 'https://example.com': `local:pin:${provider}` } });
+    }, provider);
+    await page.bringToFront();
+    await page.evaluate(() => { document.body.innerHTML = '<label>Email verification code<input id="mail-fixture" maxlength="6"></label>'; });
+    await (await privateControl(page, 'codesnap-inline-chip', code)).click();
+    await page.waitForFunction(expected => document.getElementById('mail-fixture').value === expected, code);
+    await mailbox.close();
+  }
+  const accessClient = await context.newCDPSession(page);
+  const worlds = [];
+  accessClient.on('Runtime.executionContextCreated', ({ context: world }) => worlds.push(world));
+  await accessClient.send('Runtime.enable');
+  let checkedStorage = false;
+  for (const world of worlds.filter(world => world.auxData?.type === 'isolated')) {
+    const { result } = await accessClient.send('Runtime.evaluate', {
+      contextId: world.id, awaitPromise: true, returnByValue: true,
+      expression: `(async () => { if (globalThis.chrome?.runtime?.id !== ${JSON.stringify(extensionId)}) return null;
+        try { return (await chrome.storage.local.get('securitySmokeMarker')).securitySmokeMarker; }
+        catch { return 'denied'; } })()`
+    });
+    if (result.value === null) continue;
+    if (result.value !== 'denied') throw new Error('Content script has direct access to protected storage');
+    checkedStorage = true;
+  }
+  await accessClient.detach();
+  if (!checkedStorage) throw new Error('CodeSnap content context was missing from the storage test');
 
   // Verify live SVG QR 2FA scanning inside real Chromium without native BarcodeDetector
   const qrPage = await context.newPage();
@@ -188,6 +278,7 @@ try {
   if (!/2FAS/.test(authIssuer || '')) throw new Error(`Authenticator tile issuer did not include 2FAS: ${authIssuer}`);
   if (!/^\d{3}\s\d{3}$/.test((authCode || '').trim())) throw new Error(`Unexpected Authenticator code format: ${authCode}`);
   if (!authPieVisible) throw new Error('Expected Authenticator SVG pie countdown timer to be visible');
+  await assertToolbarFits(qrPopup);
 
   await qrPopup.locator('#authModeView .auth-search').fill('no-such-account-xyz');
   await qrPopup.locator('#authModeView .auth-empty').waitFor({ timeout: 5000 });
@@ -199,6 +290,12 @@ try {
   await authWin.locator('#standaloneAuthRoot .auth-tile.current-site').waitFor({ timeout: 5000 });
   const winPieVisible = await authWin.locator('#standaloneAuthRoot .auth-tile.current-site svg.auth-pie').isVisible();
   if (!winPieVisible) throw new Error('Expected standalone Authenticator window SVG pie timer to be visible');
+  await assertToolbarFits(authWin);
+  if (process.env.AUTH_SCREENSHOT) await authWin.screenshot({ path: process.env.AUTH_SCREENSHOT });
+  if (process.env.STORE_SCREENSHOT) {
+    await authWin.setViewportSize({ width: 640, height: 400 });
+    await authWin.screenshot({ path: process.env.STORE_SCREENSHOT });
+  }
 
-  console.log('Chrome smoke: Bitbase-style email found through recent-mail fallback and inserted only into its email field; hidden-tab-URL insertion, SVG QR 2FA scanning, Authenticator view/pop-out window and popup actions all worked.');
+  console.log('Chrome smoke passed: email insertion, Gmail and Yandex fixture tabs, protected storage, private inline UI, SVG QR scan, and Authenticator popup/pop-out at 300–396px.');
 } finally { await context.close(); }

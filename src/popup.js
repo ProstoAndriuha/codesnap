@@ -665,7 +665,7 @@ async function refreshAccounts() {
   }
   $('account').value = [...$('account').options].some(option => option.value === selected) ? selected : 'all';
   $('removeAccount').hidden = !/^(?:extra|local):/.test($('account').value) || $('account').value.startsWith('local:tab:');
-  const activeLocal = (accounts.mailAccounts ?? []).filter(a => a.active).length;
+  const activeLocal = (accounts.mailAccounts ?? []).filter(a => a.active && a.kind !== 'pinned').length;
   const count = Number(Boolean(accounts.primaryEmail)) + accounts.extras.length + activeLocal;
   $('accounts').textContent = count
     ? `${count} active mail source${count === 1 ? '' : 's'} ready.`
